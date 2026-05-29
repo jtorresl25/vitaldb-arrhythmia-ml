@@ -17,21 +17,27 @@ from utils.loaders import (
 
 # ── Bootstrap ─────────────────────────────────────────────────────────────────
 meta   = load_model_metadata()
+winner = meta.get("winner_model", "—").replace("_", " ").title() if meta else "—"
+winner_raw = meta.get("winner_model", "—") if meta else "—"
 
 page_header(
     "Interpretabilidad",
     "Análisis de las features más relevantes para el modelo ganador.",
-    badge_html=badge_row(badge("LinearSVC", "winner"), badge("Explicación del modelo", "info")),
+    badge_html=badge_row(badge(winner, "winner"), badge("Explicación del modelo", "info")),
 )
 
-# ── Feature group classification (covers all 26 known features) ───────────────
+# ── Feature group classification ──────────────────────────────────────────────
+# Cubre features del flujo tabular (metadatos clínicos + RR)
+# y del flujo legacy ECG (morfología de onda).
 _GROUP_MAP: dict[str, str] = {
-    # Local RR — per-beat timing
-    "rr_prev":       "RR local",
-    "rr_next":       "RR local",
-    "rr_mean_local": "RR local",
-    "rr_ratio":      "RR local",
-    # Global RR — case-level HRV
+    # --- Flujo tabular: RR local por latido ---
+    "rr_prev":              "RR local",
+    "rr_next":              "RR local",
+    "rr_mean_local":        "RR local",
+    "rr_ratio":             "RR local",
+    "hr_inst_from_rr_prev": "RR local",
+    "position_in_case":     "Timing / posición",
+    # --- Flujo tabular: RR global (caso) ---
     "case_rr_count": "RR global (caso)",
     "case_rr_mean":  "RR global (caso)",
     "case_rr_std":   "RR global (caso)",
@@ -39,7 +45,82 @@ _GROUP_MAP: dict[str, str] = {
     "case_rr_max":   "RR global (caso)",
     "case_rr_rmssd": "RR global (caso)",
     "case_rr_pnn50": "RR global (caso)",
-    # Amplitude / morphology
+    # --- Flujo tabular: demografía ---
+    "age":    "Demografía",
+    "sex":    "Demografía",
+    "height": "Demografía",
+    "weight": "Demografía",
+    "bmi":    "Demografía",
+    "asa":    "Demografía",
+    "emop":   "Demografía",
+    # --- Flujo tabular: contexto clínico ---
+    "department": "Contexto clínico",
+    "optype":     "Contexto clínico",
+    "approach":   "Contexto clínico",
+    "position":   "Contexto clínico",
+    "ane_type":   "Contexto clínico",
+    "preop_ecg":  "Contexto clínico",
+    "preop_pft":  "Contexto clínico",
+    # --- Flujo tabular: labs preoperatorios ---
+    "preop_hb":   "Labs preoperatorios",
+    "preop_plt":  "Labs preoperatorios",
+    "preop_pt":   "Labs preoperatorios",
+    "preop_aptt": "Labs preoperatorios",
+    "preop_na":   "Labs preoperatorios",
+    "preop_k":    "Labs preoperatorios",
+    "preop_gluc": "Labs preoperatorios",
+    "preop_alb":  "Labs preoperatorios",
+    "preop_ast":  "Labs preoperatorios",
+    "preop_alt":  "Labs preoperatorios",
+    "preop_bun":  "Labs preoperatorios",
+    "preop_cr":   "Labs preoperatorios",
+    "preop_ph":   "Labs preoperatorios",
+    "preop_hco3": "Labs preoperatorios",
+    "preop_be":   "Labs preoperatorios",
+    "preop_pao2": "Labs preoperatorios",
+    "preop_paco2":"Labs preoperatorios",
+    "preop_sao2": "Labs preoperatorios",
+    "preop_htn":  "Labs preoperatorios",
+    "preop_dm":   "Labs preoperatorios",
+    # --- Flujo tabular: drogas / fluidos intraop. ---
+    "intraop_ebl":        "Drogas / fluidos intraop.",
+    "intraop_uo":         "Drogas / fluidos intraop.",
+    "intraop_rbc":        "Drogas / fluidos intraop.",
+    "intraop_ffp":        "Drogas / fluidos intraop.",
+    "intraop_crystalloid":"Drogas / fluidos intraop.",
+    "intraop_colloid":    "Drogas / fluidos intraop.",
+    "intraop_ppf":        "Drogas / fluidos intraop.",
+    "intraop_mdz":        "Drogas / fluidos intraop.",
+    "intraop_ftn":        "Drogas / fluidos intraop.",
+    "intraop_rocu":       "Drogas / fluidos intraop.",
+    "intraop_vecu":       "Drogas / fluidos intraop.",
+    "intraop_eph":        "Drogas / fluidos intraop.",
+    "intraop_phe":        "Drogas / fluidos intraop.",
+    "intraop_epi":        "Drogas / fluidos intraop.",
+    "intraop_ca":         "Drogas / fluidos intraop.",
+    # --- Flujo tabular: vía aérea / accesos ---
+    "tubesize":   "Vía aérea / accesos",
+    "lmasize":    "Vía aérea / accesos",
+    "cormack":    "Vía aérea / accesos",
+    "dltubesize": "Vía aérea / accesos",
+    "iv1":  "Vía aérea / accesos",
+    "iv2":  "Vía aérea / accesos",
+    "aline1": "Vía aérea / accesos",
+    "aline2": "Vía aérea / accesos",
+    "cline1": "Vía aérea / accesos",
+    "cline2": "Vía aérea / accesos",
+    # --- Flujo tabular: timestamps ---
+    "time_second":           "Timing / posición",
+    "analysis_start_time_sec":"Timing / posición",
+    "analysis_end_time_sec":  "Timing / posición",
+    "analyzed_duration_sec":  "Timing / posición",
+    "total_beats":            "Timing / posición",
+    "caseend":  "Timing / posición",
+    "anestart": "Timing / posición",
+    "aneend":   "Timing / posición",
+    "opstart":  "Timing / posición",
+    "opend":    "Timing / posición",
+    # --- Flujo legacy ECG: amplitud / morfología ---
     "mean":     "Amplitud / morfología",
     "std":      "Amplitud / morfología",
     "var":      "Amplitud / morfología",
@@ -54,16 +135,55 @@ _GROUP_MAP: dict[str, str] = {
     "kurtosis": "Amplitud / morfología",
     "energy":   "Amplitud / morfología",
     "abs_mean": "Amplitud / morfología",
-    # Signal quality
-    "zero_crossing_rate": "Calidad / señal",
+    "zero_crossing_rate": "Amplitud / morfología",
 }
 
+# Resolución rule-based para features no en el mapa exacto
+def _group_from_name(col: str) -> str:
+    g = _GROUP_MAP.get(col)
+    if g:
+        return g
+    if col.startswith("preop_"):
+        return "Labs preoperatorios"
+    if col.startswith("intraop_"):
+        return "Drogas / fluidos intraop."
+    if col.startswith("case_rr"):
+        return "RR global (caso)"
+    return "Otros"
+
+
+# Strip prefixes generados por ColumnTransformer (verbose_feature_names_out=True)
+# e.g. "num__age" → "age",  "cat__sex_M" → "sex"
+def _strip_prefix(feat_name: str, categorical: list[str] | None = None) -> str:
+    if feat_name.startswith("num__"):
+        return feat_name[5:]
+    if feat_name.startswith("cat__"):
+        remainder = feat_name[5:]
+        # match longest known categorical column
+        if categorical:
+            best: str | None = None
+            for col in categorical:
+                if remainder == col or remainder.startswith(col + "_"):
+                    if best is None or len(col) > len(best):
+                        best = col
+            if best:
+                return best
+        # fallback: return part before first underscore of value
+        return remainder
+    return feat_name
+
+
 _GROUP_COLORS = {
-    "RR global (caso)":     "#2dd4bf",
-    "Amplitud / morfología":"#4a8cff",
-    "RR local":             "#a78bfa",
-    "Calidad / señal":      "#fbbf24",
-    "Otros":                "#5d6c8c",
+    "RR local":               "#a78bfa",
+    "RR global (caso)":       "#2dd4bf",
+    "Demografía":             "#f472b6",
+    "Labs preoperatorios":    "#fb923c",
+    "Drogas / fluidos intraop.": "#facc15",
+    "Contexto clínico":       "#4a8cff",
+    "Vía aérea / accesos":    "#34d399",
+    "Timing / posición":      "#94a3b8",
+    "Amplitud / morfología":  "#60a5fa",
+    "Otros":                  "#5d6c8c",
 }
 
 # ── Robust column detection ────────────────────────────────────────────────────
@@ -118,15 +238,24 @@ df_imp = df_imp.dropna(subset=[IMP_COL]).sort_values(IMP_COL, ascending=False).r
 
 n_features_csv   = len(df_imp)
 n_features_total = len(feature_cols) if has_cols else n_features_csv
-top_feature      = str(df_imp.loc[0, FEAT_COL])
+# Use stripped name for display; raw name kept in FEAT_COL
+top_feature      = _strip_prefix(str(df_imp.loc[0, FEAT_COL]), _known_cat if True else [])
 top_importance   = float(df_imp.loc[0, IMP_COL])
 total_importance = float(df_imp[IMP_COL].sum())
 
-# Assign group to each feature in CSV
-df_imp["Grupo"] = df_imp[FEAT_COL].map(lambda f: _GROUP_MAP.get(str(f), "Otros"))
+# Strip num__/cat__ prefixes; use known categorical list for cat__ mapping
+_known_cat = meta.get("categorical_features", []) if meta else []
+
+# Assign group: strip prefix first, then lookup
+def _assign_group(feat_name: str) -> str:
+    base = _strip_prefix(str(feat_name), _known_cat)
+    return _group_from_name(base)
+
+df_imp["Grupo"]       = df_imp[FEAT_COL].map(_assign_group)
+df_imp["feature_base"] = df_imp[FEAT_COL].map(lambda f: _strip_prefix(str(f), _known_cat))
 
 # Infer interpretation type from metadata
-interp_type = "coeficientes (abs)"
+interp_type = "importancia de features"
 if meta and meta.get("winner_model", ""):
     m = meta["winner_model"].lower()
     if "forest" in m or "tree" in m or "xgb" in m or "boost" in m:
@@ -135,17 +264,26 @@ if meta and meta.get("winner_model", ""):
         interp_type = "norma de coeficientes"
 
 # ── Callout metodológico ──────────────────────────────────────────────────────
-callout(
-    "info",
-    "Cómo interpretar la importancia de features",
+_interp_body = (
     "La importancia de variables ayuda a entender qué información usa el modelo, "
     "pero <b>no equivale a una explicación clínica directa</b>. "
-    "Para <b>LinearSVC</b>, la importancia se deriva de la norma de los coeficientes del hiperplano: "
-    "features con coeficientes grandes (positivos o negativos) tienen más influencia en la decisión. "
-    "Una feature importante <i>no implica causalidad</i> — puede ser una correlación espuria. "
-    "Features muy correlacionadas entre sí pueden repartirse la importancia artificialmente. "
-    "Este análisis es <b>académico</b> y no debe usarse para diagnóstico clínico.",
 )
+if "árbol" in interp_type or "forest" in winner_raw.lower():
+    _interp_body += (
+        f"Para <b>{winner}</b> (Random Forest), la importancia se mide como la "
+        "reducción promedio de impureza Gini a través de todos los árboles. "
+        "Este modelo usa <b>datos tabulares</b> (metadatos clínicos + intervalos RR), "
+        "no la forma de onda ECG directamente. "
+    )
+else:
+    _interp_body += (
+        f"Para <b>{winner}</b>, la importancia se deriva de los coeficientes del modelo. "
+    )
+_interp_body += (
+    "Una feature importante <i>no implica causalidad</i>. "
+    "Este análisis es <b>académico</b> y no debe usarse para diagnóstico clínico."
+)
+callout("info", "Cómo interpretar la importancia de features", _interp_body)
 
 st.write("")
 
@@ -186,13 +324,13 @@ with c5:
     metric_card(
         "Modelo interpretado",
         winner,
-        meta.get("winner_model", "—") if meta else "—",
+        winner_raw,
         accent="muted",
     )
 with c6:
     metric_card(
         "Tipo de interpretación",
-        "coeficientes",
+        interp_type.split("(")[0].strip(),
         interp_type,
         accent="muted",
     )
@@ -218,7 +356,8 @@ with col_sel:
         top_n  = _n_options[_labels_n.index(choice)]
 
 df_plot = df_imp.head(top_n)
-labels  = df_plot[FEAT_COL].str.replace("_", " ").tolist()
+# Use stripped base names for human-readable labels
+labels  = df_plot["feature_base"].str.replace("_", " ").tolist()
 values  = df_plot[IMP_COL].tolist()
 
 chart_col, table_col = st.columns([1.5, 1])
@@ -391,9 +530,9 @@ top_group_pct = top_group_imp / total_importance
 second_group     = group_summary.loc[1, "Grupo"] if len(group_summary) > 1 else "—"
 second_group_pct = float(group_summary.loc[1, "Importancia acumulada"]) / total_importance if len(group_summary) > 1 else 0.0
 
-# Top 2 features
+# Top 2 features — use stripped base names for readability
 top2 = df_imp.head(2)
-top2_names = [str(top2.loc[r, FEAT_COL]) for r in top2.index]
+top2_names = [str(top2.loc[r, "feature_base"]) for r in top2.index]
 top2_vals  = [float(top2.loc[r, IMP_COL]) for r in top2.index]
 
 with st.container(border=True):
@@ -461,10 +600,10 @@ with lim1:
 with lim2:
     callout(
         "warn",
-        "LinearSVC no genera explicaciones locales",
-        "Los coeficientes globales del modelo lineal no explican por qué se clasificó "
-        "una ventana específica de cierta manera. Para explicaciones locales se necesita "
-        "SHAP o LIME.",
+        "Importancia global — sin explicaciones locales",
+        "La importancia de features es una medida global del modelo y no explica "
+        "por qué un latido específico fue clasificado de cierta manera. "
+        "Para explicaciones locales se necesita SHAP o LIME.",
     )
     callout(
         "warn",

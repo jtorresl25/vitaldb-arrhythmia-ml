@@ -394,13 +394,13 @@ with st.expander("Mejores hiperparámetros por modelo", expanded=False):
         card_header("Estrategia de búsqueda", "metodología")
         kv_table([
             ("Método",           "RandomizedSearchCV"),
-            ("Split",            "StratifiedGroupKFold · 5-fold · group=case_id"),
+            ("Split",            "StratifiedGroupKFold · por case_id"),
             ("Scoring",          "f1_macro"),
             ("Train groups",     str(meta.get("n_train_groups", "—"))),
-            ("Test groups",      str(meta.get("n_test_groups", "—"))),
+            ("Test groups",      str(meta.get("n_test_groups",  "—"))),
             ("Features",         str(meta.get("n_features", "—"))),
-            ("Seed / modo",      f"fast_mode={meta.get('fast_mode','—')}"),
-            ("Fecha entreno",    str(meta.get("training_datetime", "—"))[:19]),
+            ("Tipo de datos",    "Tabular · anotaciones por latido + metadatos clínicos"),
+            ("Fecha entreno",    str(meta.get("training_datetime", meta.get("trained_at", "—")))[:19]),
         ])
 
 
@@ -487,8 +487,8 @@ with st.container(border=True):
     callout(
         "warn",
         "Limitación metodológica",
-        "Estos resultados corresponden a un pipeline académico en modo <code>fast_mode</code>, "
-        "con búsqueda de hiperparámetros reducida. Los valores de F1-macro podrían mejorar "
-        "con más iteraciones de búsqueda, augmentación de clases minoritarias (SMOTE) o "
-        "modelos basados en representaciones aprendidas (1D-CNN).",
+        "Estos resultados corresponden a un pipeline académico con búsqueda de hiperparámetros reducida "
+        "(<code>--n-iter 15 --max-cases 400 --top-features 30</code>). "
+        "Los valores de F1-macro podrían mejorar con más iteraciones, "
+        "re-balanceo de clases minoritarias (SMOTE) o features RR más granulares.",
     )

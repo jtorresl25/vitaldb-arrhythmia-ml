@@ -18,28 +18,32 @@ meta    = load_model_metadata()
 df_cmp  = load_model_comparison()
 df_cls  = load_classification_report()
 
-winner_raw  = meta.get("winner_model", "linear_svc")      if meta else "linear_svc"
+winner_raw  = meta.get("winner_model", "—") if meta else "—"
 winner_nice = winner_raw.replace("_", " ").title()
-f1_val      = meta.get("winner_test_f1_macro")             if meta else None
-f1_str      = f"{f1_val:.3f}"                              if f1_val is not None else "0.344"
+f1_val      = meta.get("winner_test_f1_macro") if meta else None
+f1_str      = f"{f1_val:.3f}" if f1_val is not None else "—"
 acc_val     = None
 prec_val    = None
 rec_val     = None
 
-if df_cmp is not None:
-    winner_row = df_cmp[df_cmp["model"] == winner_raw]
-    if not winner_row.empty:
-        acc_val  = winner_row["test_accuracy"].iloc[0]
-        prec_val = winner_row["test_precision_macro"].iloc[0]
-        rec_val  = winner_row["test_recall_macro"].iloc[0]
+if df_cmp is not None and winner_raw != "—" and "model" in df_cmp.columns:
+    winner_row_df = df_cmp[df_cmp["model"] == winner_raw]
+    if winner_row_df.empty:
+        f1_col = next((c for c in ["test_f1_macro", "f1_macro"] if c in df_cmp.columns), None)
+        if f1_col:
+            winner_row_df = df_cmp.sort_values(f1_col, ascending=False).head(1)
+    if not winner_row_df.empty:
+        acc_val  = winner_row_df["test_accuracy"].iloc[0]          if "test_accuracy"          in winner_row_df.columns else None
+        prec_val = winner_row_df["test_precision_macro"].iloc[0]   if "test_precision_macro"   in winner_row_df.columns else None
+        rec_val  = winner_row_df["test_recall_macro"].iloc[0]      if "test_recall_macro"      in winner_row_df.columns else None
 
-# Derive counts from metadata or defaults
-train_rows  = meta.get("train_size_rows", 509707) if meta else 509707
-test_rows   = meta.get("test_size_rows",  128983) if meta else 128983
+# Derive counts from metadata (tabular metadata may not include all fields)
+train_rows  = meta.get("train_size_rows", 0) if meta else 0
+test_rows   = meta.get("test_size_rows",  0) if meta else 0
 total_rows  = train_rows + test_rows
-n_features  = meta.get("n_features", 26)           if meta else 26
-n_train_grp = meta.get("n_train_groups", 384)      if meta else 384
-n_test_grp  = meta.get("n_test_groups",  97)       if meta else 97
+n_features  = meta.get("n_features", 0)      if meta else 0
+n_train_grp = meta.get("n_train_groups", 0)  if meta else 0
+n_test_grp  = meta.get("n_test_groups",  0)  if meta else 0
 total_cases = n_train_grp + n_test_grp
 
 # Count real classes from classification report (exclude summary rows)
@@ -64,16 +68,16 @@ st.markdown(
               <em>arritmias intraoperatorias</em>
               con señales ECG y modelos ML</h1>
           <p>
-            Esta demo recorre el pipeline completo: limpieza de señales ECG de la
-            VitalDB Arrhythmia Database, generación de ventanas, ingeniería de
-            features y comparación de modelos clásicos de clasificación.
+            Esta demo recorre el pipeline completo: anotaciones de ritmo por latido
+            de la VitalDB Arrhythmia Database, construcción de features tabulares
+            (metadatos clínicos + RR intervals) y comparación de modelos clásicos de clasificación.
           </p>
           <div class="hero-tags">
             {badge("scikit-learn","muted")}
-            {badge("XGBoost","muted")}
             {badge(f"{n_classes} clases","muted")}
-            {badge(f"{n_features} features","muted")}
-            {badge("GroupKFold (case_id)","muted")}
+            {badge(f"{n_features} features" if n_features > 0 else "features tabulares","muted")}
+            {badge("GroupSplit (case_id)","muted")}
+            {badge("Demo académica","warn")}
           </div>
           <div class="hero-foot">
             <span>VitalDB Arrhythmia Database</span>
@@ -99,18 +103,24 @@ section_title("Resumen del proyecto")
 
 col1, col2, col3, col4 = st.columns(4)
 with col1:
+    _cases_str  = str(total_cases) if total_cases > 0 else "—"
+    _groups_str = (f"{n_train_grp} train · {n_test_grp} test"
+                   if n_train_grp > 0 else "split 80/20 por case_id")
     metric_card(
         "Casos quirúrgicos",
-        str(total_cases),
-        helper=f"{n_train_grp} train · {n_test_grp} test",
+        _cases_str,
+        helper=_groups_str,
         accent="blue",
         helper_kind="muted",
     )
 with col2:
+    _rows_str   = f"{total_rows:,}".replace(",", " ") if total_rows > 0 else "—"
+    _detail_str = (f"train {train_rows:,} · test {test_rows:,}".replace(",", " ")
+                   if total_rows > 0 else "latidos anotados · flujo tabular")
     metric_card(
-        "Ventanas ECG",
-        f"{total_rows:,}".replace(",", " "),
-        helper=f"train {train_rows:,} · test {test_rows:,}".replace(",", " "),
+        "Latidos anotados",
+        _rows_str,
+        helper=_detail_str,
         accent="teal",
         helper_kind="muted",
     )
@@ -169,7 +179,10 @@ with col_a:
             hp = meta["best_hyperparams_per_model"].get(winner_raw, {})
             if hp:
                 st.caption("Mejores hiperparámetros:")
-                hp_str = " · ".join(f"{k}={v}" for k, v in hp.items())
+                hp_str = " · ".join(
+                    f"{k.replace('clf__','').replace('preprocessor__','')}={v}"
+                    for k, v in hp.items()
+                )
                 st.code(hp_str, language=None)
 
 # Card B — Dataset
@@ -177,12 +190,12 @@ with col_b:
     with st.container(border=True):
         card_header("Resumen del dataset", "VitalDB")
         kv_table([
-            ("Casos totales",  f"{total_cases} (train+test)"),
-            ("Señal",          "ECG II · 250 Hz"),
-            ("Train windows",  f"{train_rows:,}".replace(",", " ")),
-            ("Test windows",   f"{test_rows:,}".replace(",", " ")),
+            ("Casos totales",  f"{total_cases}" if total_cases > 0 else "—"),
+            ("Tipo de datos",  "Anotaciones por latido + metadatos clínicos"),
+            ("Train ventanas", f"{train_rows:,}".replace(",", " ") if train_rows > 0 else "—"),
+            ("Test ventanas",  f"{test_rows:,}".replace(",", " ")  if test_rows  > 0 else "—"),
             ("Clases",         f"{n_classes} ritmos"),
-            ("Features",       str(n_features)),
+            ("Features",       str(n_features) if n_features > 0 else "—"),
         ])
 
         if df_cls is not None:
@@ -212,8 +225,8 @@ with col_c:
             )
             st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
             st.caption(
-                f"Winner: {winner_nice} · F1={f1_str} "
-                f"(métrica principal: macro promedia las 10 clases)"
+                f"Ganador: {winner_nice} · F1-macro={f1_str} "
+                f"(métrica principal: promedio uniforme por clase)"
             )
         else:
             st.warning("model_comparison.csv no encontrado.")
@@ -254,14 +267,14 @@ with col_e:
     with st.container(border=True):
         card_header("Pipeline resumido", "end-to-end")
         steps = [
-            ("01", "Carga y EDA",            "VitalDB · 482+ casos"),
-            ("02", "Limpieza de señales",     "Filtros · NaN · SNR"),
-            ("03", "Ventaneo ECG",            "2 s · 50% overlap"),
-            ("04", "Feature engineering",     f"{n_features} features por ventana"),
-            ("05", "Split por case_id",       "GroupKFold · sin leakage"),
-            ("06", "Entrenamiento",           f"{n_models} modelos baseline"),
-            ("07", "Búsqueda de HP",          "RandomizedSearchCV"),
-            ("08", "Evaluación final",        "F1-macro · CM · Reporte"),
+            ("01", "Carga y EDA",           "VitalDB Arrhythmia · anotaciones PhysioNet"),
+            ("02", "Limpieza y filtros",    "Noise excluido · calidad de señal"),
+            ("03", "Features tabulares",    "Metadatos clínicos + RR intervals por latido"),
+            ("04", "Feature selection",     f"Top {n_features} features por importancia RF" if n_features > 0 else "Top features por importancia RF"),
+            ("05", "Split por case_id",     "80/20 · GroupShuffleSplit · sin leakage"),
+            ("06", "Entrenamiento",         f"{n_models} modelos · RandomizedSearchCV"),
+            ("07", "Evaluación final",      "F1-macro · CM · Reporte por clase"),
+            ("08", "App Streamlit",         "Predicción demo sobre datos tabulares"),
         ]
         rows_html = "".join(
             f"""<div style="display:grid;grid-template-columns:28px 1fr;gap:8px 10px;

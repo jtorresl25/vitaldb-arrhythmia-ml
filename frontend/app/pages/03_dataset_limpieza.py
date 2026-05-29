@@ -6,13 +6,12 @@ placeholder_page(
     title="Dataset y limpieza",
     description=(
         "Auditoría de calidad sobre la VitalDB Arrhythmia Database. "
-        "Estadísticas de señales auditadas, ventanas generadas, ventanas válidas, "
-        "razones de descarte (NaN, saturación, SNR bajo, pulso ausente) y "
-        "distribución de clases."
+        "Distribución de clases de ritmo, cobertura de cases por clase, "
+        "estadísticas de calidad de señal y balance del dataset tabular."
     ),
     files_needed=[
-        "reports/tables/best_model_classification_report.csv  (distribución de clases)",
-        "data/demo/demo_windows.parquet  (opcional — para histogramas reales)",
+        "reports/tables/tabular_best_model_classification_report.csv  (distribución de clases)",
+        "reports/tables/tabular_class_support_train_test.csv  (soporte por clase en split)",
     ],
-    note="Los histogramas de duración y SNR se generarán desde metadata; la distribución de clases usa el classification report.",
+    note="La distribución de clases se deriva del classification report del modelo tabular.",
 )

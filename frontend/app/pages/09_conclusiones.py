@@ -38,27 +38,39 @@ if df_cls is not None:
     good_classes  = df_classes[df_classes["f1-score"] >= 0.70].index.tolist()
     medium_classes= df_classes[(df_classes["f1-score"] >= 0.30) & (df_classes["f1-score"] < 0.70)].index.tolist()
     hard_classes  = df_classes[df_classes["f1-score"] < 0.30].index.tolist()
-    total_test    = int(df_classes["support"].sum()) if "support" in df_classes.columns else 128983
+    total_test    = int(df_classes["support"].sum()) if "support" in df_classes.columns else 0
 else:
     df_classes    = None
-    n_classes     = 10
-    good_classes  = ["AFIB/AFL", "N"]
-    medium_classes= ["WAP/MAT", "SND", "Patterned Ventricular Ectopy", "Patterned Atrial Ectopy"]
-    hard_classes  = ["VT", "SVTA", "AVB", "Unclassifiable"]
-    total_test    = 128983
+    n_classes     = 0
+    good_classes  = []
+    medium_classes= []
+    hard_classes  = []
+    total_test    = 0
 
-# Derive winner metrics from model comparison
+# Winner info from metadata (canonical source)
+_winner_id   = meta.get("winner_model", "—") if meta else "—"
+_winner_nice = _winner_id.replace("_", " ").title() if _winner_id != "—" else "—"
+winner_f1    = meta.get("winner_test_f1_macro") if meta else None
+winner_f1_str = f"{winner_f1:.3f}" if winner_f1 is not None else "—"
+
+# Supplementary metrics from comparison CSV
+winner_acc  = None
+winner_time = None
+n_models    = 0
 if df_models is not None and "model" in df_models.columns:
-    wr = df_models[df_models["model"] == "linear_svc"]
-    winner_acc  = float(wr["test_accuracy"].iloc[0])    if not wr.empty else 0.8061
-    winner_f1   = float(wr["test_f1_macro"].iloc[0])   if not wr.empty else 0.3439
-    winner_time = float(wr["fit_time_seconds"].iloc[0]) if not wr.empty else 185.0
-    n_models    = len(df_models)
-else:
-    winner_acc, winner_f1, winner_time, n_models = 0.8061, 0.3439, 185.0, 5
+    n_models = len(df_models)
+    wr = df_models[df_models["model"] == _winner_id]
+    if wr.empty:
+        f1_col = next((c for c in ["test_f1_macro", "f1_macro"] if c in df_models.columns), None)
+        if f1_col:
+            wr = df_models.dropna(subset=[f1_col]).sort_values(f1_col, ascending=False).head(1)
+    if not wr.empty:
+        winner_acc  = float(wr["test_accuracy"].iloc[0])  if "test_accuracy"  in wr.columns else None
+        t_col       = next((c for c in ["fit_seconds", "fit_time_seconds"] if c in wr.columns), None)
+        winner_time = float(wr[t_col].iloc[0]) if t_col else None
 
-train_size = meta.get("train_size_rows", 509707) if meta else 509707
-test_size  = meta.get("test_size_rows",  128983) if meta else 128983
+train_size = meta.get("train_size_rows", 0) if meta else 0
+test_size  = meta.get("test_size_rows",  0) if meta else 0
 
 # ── Callout de alcance ────────────────────────────────────────────────────────
 callout(
@@ -77,25 +89,45 @@ st.write("")
 # ── Resumen ejecutivo ─────────────────────────────────────────────────────────
 section_title("Resumen ejecutivo")
 
+_n_train_grp = meta.get("n_train_groups", 0) if meta else 0
+_n_test_grp  = meta.get("n_test_groups",  0) if meta else 0
+_split_str   = (f"{_n_train_grp} grupos entrenamiento, {_n_test_grp} test"
+                if _n_train_grp else "split 80/20 por case_id")
+_winner_acc_str = f", Acc={winner_acc:.3f}" if winner_acc is not None else ""
+
+# Top features from importance CSV
+_top_feats_str = "features tabulares (metadatos clínicos + RR intervals)"
+if df_imp is not None and not df_imp.empty:
+    _feat_col = next((c for c in ["feature_base", "feature"] if c in df_imp.columns), None)
+    _imp_col  = next((c for c in ["importance", "abs_coef"] if c in df_imp.columns), None)
+    if _feat_col and _imp_col:
+        _top2 = (df_imp.dropna(subset=[_imp_col])
+                       .sort_values(_imp_col, ascending=False)
+                       .head(2)[_feat_col].tolist())
+        if _top2:
+            _top2_names = [str(n).replace("_"," ") for n in _top2]
+            _top_feats_str = (f"<code>{_top2_names[0]}</code> y "
+                              f"<code>{_top2_names[1]}</code>" if len(_top2) > 1
+                              else f"<code>{_top2_names[0]}</code>")
+
 kv_table([
     ("Pipeline completo",
-     f"Se construyó un flujo reproducible desde señal ECG cruda hasta evaluación comparativa "
-     f"de {n_models} modelos clásicos de ML."),
+     f"Flujo reproducible desde anotaciones VitalDB hasta evaluación comparativa "
+     f"de {n_models if n_models else '—'} modelos clásicos de ML."),
     ("Separación por case_id",
-     "El split tren/test se hizo por <b>case_id</b> para evitar leakage entre ventanas "
-     f"del mismo paciente ({meta.get('n_train_groups', 384)} grupos entrenamiento, "
-     f"{meta.get('n_test_groups', 97)} test)."),
+     f"El split tren/test se hizo por <b>case_id</b> para evitar leakage "
+     f"({_split_str})."),
     ("Modelo ganador",
-     f"<b>LinearSVC</b> fue el mejor modelo según F1-macro "
-     f"(F1={winner_f1:.3f}, Acc={winner_acc:.3f})."),
+     f"<b>{_winner_nice}</b> fue el mejor modelo según F1-macro "
+     f"(F1={winner_f1_str}{_winner_acc_str})."),
     ("Desempeño global",
-     f"El rendimiento es <b>moderado y desigual</b>: "
-     f"{len(good_classes)} clases con F1 ≥ 0.70, "
-     f"{len(hard_classes)} clases con F1 &lt; 0.30."),
+     (f"El rendimiento es <b>moderado y desigual</b>: "
+      f"{len(good_classes)} clases con F1 ≥ 0.70, "
+      f"{len(hard_classes)} clases con F1 &lt; 0.30.")
+     if n_classes > 0 else
+     "Reporte de clasificación no disponible — ejecuta el pipeline tabular."),
     ("Interpretabilidad",
-     "Las features más importantes son de variabilidad del ritmo global "
-     "(<code>case_rr_std</code>, <code>case_rr_rmssd</code>) y "
-     "morfología de señal (<code>std</code>, <code>var</code>, <code>energy</code>)."),
+     f"Las features más importantes según {_winner_nice} son: {_top_feats_str}."),
     ("Desbalance de clases",
      "El dataset está fuertemente desbalanceado: N y AFIB/AFL dominan. "
      "Las clases minoritarias (AVB, SVTA, VT) tienen desempeño muy bajo o nulo."),
@@ -112,19 +144,29 @@ with c1:
     with st.container(border=True):
         card_header(
             "Modelo ganador",
-            "LinearSVC",
+            _winner_nice,
             right_html=badge("winner", "winner"),
         )
-        metric_card("F1-macro (test)", f"{winner_f1:.4f}", "métrica principal", accent="teal", helper_kind="ok")
-        metric_card("Accuracy (test)", f"{winner_acc:.4f}", "puede ser engañosa", accent="blue")
-        metric_card("Tiempo de ajuste", f"{winner_time:.0f} s", f"C = {meta.get('best_hyperparams_per_model', {}).get('linear_svc', {}).get('clf__C', 0.0746):.4f}" if meta else "C = 0.0746", accent="muted")
+        metric_card("F1-macro (test)", winner_f1_str, "métrica principal", accent="teal", helper_kind="ok")
+        metric_card("Accuracy (test)", f"{winner_acc:.4f}" if winner_acc is not None else "—", "puede ser engañosa", accent="blue")
+        _hp_str = "—"
+        if meta and "best_hyperparams_per_model" in meta:
+            hp = meta["best_hyperparams_per_model"].get(_winner_id, {})
+            if hp:
+                _hp_str = " · ".join(f"{k}={v}" for k, v in list(hp.items())[:2])
+        metric_card("Hiperparámetros", _hp_str[:40] + ("…" if len(_hp_str) > 40 else ""),
+                    f"fit: {winner_time:.0f} s" if winner_time else "—", accent="muted")
 
 with c2:
     with st.container(border=True):
-        card_header("Dataset", f"{(train_size + test_size):,} ventanas", right_html=badge("ECG", "info"))
-        metric_card("Entrenamiento", f"{train_size:,}", f"{meta.get('n_train_groups', 384)} casos", accent="blue")
-        metric_card("Test", f"{test_size:,}", f"{meta.get('n_test_groups', 97)} casos", accent="blue")
-        metric_card("Features", str(meta.get("n_features", 26) if meta else 26), "por ventana ECG", accent="muted")
+        _total_str = f"{(train_size + test_size):,}" if (train_size + test_size) > 0 else "—"
+        card_header("Dataset", f"{_total_str} ventanas", right_html=badge("Tabular", "info"))
+        metric_card("Entrenamiento", f"{train_size:,}" if train_size > 0 else "—",
+                    f"{meta.get('n_train_groups', '—')} casos" if meta else "—", accent="blue")
+        metric_card("Test", f"{test_size:,}" if test_size > 0 else "—",
+                    f"{meta.get('n_test_groups', '—')} casos" if meta else "—", accent="blue")
+        _n_feat = meta.get("n_features", 0) if meta else 0
+        metric_card("Features", str(_n_feat) if _n_feat > 0 else "—", "features tabulares seleccionadas", accent="muted")
 
 with c3:
     with st.container(border=True):
@@ -146,10 +188,21 @@ with c3:
 
 with c4:
     with st.container(border=True):
-        card_header("Interpretabilidad", "coeficientes LinearSVC", right_html=badge("global", "muted"))
-        metric_card("Feature #1", "case rr std", "HRV global — 23.6%", accent="teal", helper_kind="ok")
-        metric_card("Feature #2", "case rr rmssd", "HRV global — 23.0%", accent="teal")
-        metric_card("Grupo dominante", "RR global", "≈ 46.6% importancia", accent="muted")
+        _interp_type = "feature importance" if ("forest" in _winner_id or "tree" in _winner_id) else "coeficientes"
+        card_header("Interpretabilidad", f"{_interp_type} · {_winner_nice}", right_html=badge("global", "muted"))
+        # Pull top features dynamically from importance CSV
+        if df_imp is not None and not df_imp.empty:
+            _fc = next((c for c in ["feature_base", "feature"] if c in df_imp.columns), None)
+            _ic = next((c for c in ["importance", "abs_coef"] if c in df_imp.columns), None)
+            if _fc and _ic:
+                _top3 = df_imp.dropna(subset=[_ic]).sort_values(_ic, ascending=False).head(3)
+                for _rank, (_idx, _row) in enumerate(zip(range(1, 4), _top3.itertuples()), 1):
+                    _fname = str(getattr(_idx, _fc, "—") if False else _top3.iloc[_rank - 1][_fc]).replace("_", " ")
+                    _fval  = float(_top3.iloc[_rank - 1][_ic])
+                    metric_card(f"Feature #{_rank}", _fname[:20], f"importancia {_fval:.3f}",
+                                accent="teal" if _rank == 1 else "blue", helper_kind="ok" if _rank == 1 else "muted")
+        else:
+            metric_card("Features", "—", "importancia no disponible", accent="muted")
 
 st.write("")
 
@@ -220,7 +273,7 @@ with st.container(border=True):
         (badge("✓", "ok") + " Evaluación por clase",
          "El reporte de clasificación expone el desempeño real por tipo de arritmia."),
         (badge("✓", "ok") + " Interpretabilidad inicial",
-         "Los coeficientes del LinearSVC dan una señal coherente sobre las features más útiles."),
+         f"La importancia de features del {_winner_nice} da señal sobre qué variables clínicas son más discriminativas."),
         (badge("✓", "ok") + " App Streamlit con datos reales",
          "Todas las métricas y visualizaciones usan archivos reales del pipeline."),
     ])
@@ -235,8 +288,8 @@ lim1, lim2 = st.columns(2)
 with lim1:
     callout(
         "warn",
-        "F1-macro bajo (0.3439)",
-        "El modelo global tiene desempeño moderado. La accuracy alta (80%) es engañosa: "
+        f"F1-macro bajo ({winner_f1_str})",
+        "El modelo global tiene desempeño moderado. La accuracy puede resultar engañosa: "
         "refleja el dominio de clases N y AFIB/AFL, no el desempeño en clases minoritarias.",
     )
     callout(
@@ -253,30 +306,30 @@ with lim1:
         "Esto limita severamente la utilidad clínica del modelo actual.",
     )
     callout(
-        "warn",
-        "Demo de predicciones pendiente",
-        "Faltan <code>test_predictions.csv</code>, <code>confusion_matrix.csv</code> "
-        "y <code>demo_windows.parquet</code>. La página 07 (predicciones) "
-        "no puede implementarse todavía.",
+        "info",
+        "Predicción demo disponible (datos tabulares)",
+        "La página 07 permite predecir sobre filas reales del dataset tabular procesado. "
+        "La integración con ECG crudo externo queda como trabajo futuro.",
     )
 
 with lim2:
     callout(
         "warn",
         "Interpretación no causal",
-        "La importancia de features por coeficientes del LinearSVC no implica causalidad clínica. "
+        f"La importancia de features del {_winner_nice} no implica causalidad clínica. "
         "Es una correlación aprendida del dataset de entrenamiento.",
     )
     callout(
         "warn",
-        "Features correlacionadas",
-        "Pares como (std, var) o (case_rr_std, case_rr_rmssd) miden casi lo mismo. "
-        "Sus importancias individuales subestiman la influencia real del concepto subyacente.",
+        "Variables intraoperatorias acumuladas",
+        "Algunas features tabulares (p. ej. <code>intraop_ppf</code>, <code>intraop_rbc</code>) "
+        "representan totales del caso, no el estado en el momento del latido. "
+        "Esto puede introducir sesgo temporal en el modelo.",
     )
     callout(
         "warn",
         "Sin explicaciones locales",
-        "Los coeficientes globales no explican por qué una ventana específica fue clasificada "
+        "La importancia global no explica por qué un latido específico fue clasificado "
         "de cierta manera. Para eso se requiere SHAP o LIME.",
     )
     callout(
@@ -298,18 +351,18 @@ with col_near:
     with st.container(border=True):
         card_header("Corto plazo", "completar la app y los datos", right_html=badge("prioridad alta", "err"))
         kv_table([
-            ("1", "Exportar <code>reports/tables/test_predictions.csv</code> desde el notebook de evaluación."),
-            ("2", "Exportar <code>reports/tables/confusion_matrix.csv</code> en formato long (real_label, predicted_label, count)."),
-            ("3", "Crear <code>data/demo/demo_windows.parquet</code> con ventanas ECG livianas para la demo."),
-            ("4", "Implementar <code>07_predicciones.py</code> una vez que existan esos archivos."),
-            ("5", "Implementar <code>03_dataset_limpieza.py</code> con estadísticas de ventanas, calidad de señal y distribución de clases."),
+            ("1", "Implementar <code>03_dataset_limpieza.py</code> con estadísticas del dataset tabular y distribución de clases."),
+            ("2", "Exportar <code>reports/tables/tabular_confusion_matrix_absolute.csv</code> en formato long para heatmap interactivo."),
+            ("3", "Agregar <code>n_train_groups</code>, <code>n_test_groups</code> y tamaños de split al JSON de metadata tabular."),
+            ("4", "Ampliar la demo de predicción (p. 07) con filtros por clase y visualización de probabilidades por clase."),
+            ("5", "Re-ejecutar el pipeline con <code>--n-iter 30 --n-splits 5</code> sobre todos los casos para métricas definitivas."),
         ])
 
 with col_far:
     with st.container(border=True):
         card_header("Mediano plazo", "mejorar el modelo", right_html=badge("mejora de calidad", "info"))
         kv_table([
-            ("6", "<b>Class weighting</b>: usar <code>class_weight='balanced'</code> en LinearSVC para penalizar más los errores en clases minoritarias."),
+            ("6", "<b>Class weighting</b>: verificar que <code>class_weight='balanced'</code> esté activo en el modelo para penalizar más los errores en clases minoritarias."),
             ("7", "<b>SMOTE / resampling</b>: aumentar muestras de clases minoritarias en el set de entrenamiento."),
             ("8", "<b>Agrupación clínica</b>: considerar fusionar clases cercanas (p. ej. Patterned Atrial Ectopy y WAP/MAT) para reducir el problema de desbalance."),
             ("9", "<b>SHAP / Permutation Importance</b>: reemplazar importancia por coeficientes con métodos más robustos y con explicaciones locales."),
@@ -322,15 +375,15 @@ st.write("")
 section_title("Estado actual de la app")
 
 pages_data = [
-    ("01", "Inicio",               "Implementada",     "ok"),
-    ("02", "Pipeline",             "Placeholder",      "warn"),
-    ("03", "Dataset y limpieza",   "Pendiente",        "warn"),
-    ("04", "Rendimiento del modelo","Implementada",    "ok"),
-    ("05", "Evaluación por clase", "Implementada",     "ok"),
-    ("06", "Matriz de confusión",  "Implementada (PNG fallback)", "ok"),
-    ("07", "Predicciones",         "Pendiente — archivos faltantes", "err"),
-    ("08", "Interpretabilidad",    "Implementada",     "ok"),
-    ("09", "Conclusiones",         "Implementada",     "ok"),
+    ("01", "Inicio",               "Implementada",                    "ok"),
+    ("02", "Pipeline",             "Diagrama HTML externo",           "ok"),
+    ("03", "Dataset y limpieza",   "Pendiente",                       "warn"),
+    ("04", "Rendimiento del modelo","Implementada",                   "ok"),
+    ("05", "Evaluación por clase", "Implementada",                    "ok"),
+    ("06", "Matriz de confusión",  "Implementada (PNG + CSV)",        "ok"),
+    ("07", "Predicciones",         "Implementada — demo tabular",     "ok"),
+    ("08", "Interpretabilidad",    "Implementada",                    "ok"),
+    ("09", "Conclusiones",         "Implementada",                    "ok"),
 ]
 
 STATUS_ICONS = {"ok": "✓", "warn": "◑", "err": "✗"}
@@ -364,7 +417,7 @@ with c_a:
 with c_b:
     metric_card("Pendientes / placeholder", str(n_pending), "páginas", accent="warn", helper_kind="warn")
 with c_c:
-    metric_card("Datos faltantes", "3 archivos", "predictions · cm csv · demo parquet", accent="err", helper_kind="warn")
+    metric_card("Pendientes", "1 página", "Dataset y limpieza (03)", accent="warn", helper_kind="warn")
 
 st.write("")
 
@@ -379,18 +432,19 @@ with st.container(border=True):
     )
     st.write("")
     st.html(
-        '<p style="color:var(--fg-1);font-size:15px;line-height:1.7;max-width:860px">'
-        "El proyecto demuestra que es posible construir un <b>flujo reproducible y evaluado</b> "
-        "para clasificar ritmos intraoperatorios a partir de features de ECG. "
-        "El modelo LinearSVC logra distinguir correctamente los dos ritmos dominantes "
-        "(N y AFIB/AFL) con F1 superior a 0.88, lo que representa una base sólida. "
-        "Sin embargo, el análisis también evidencia que el <b>desbalance de clases</b> "
-        "y la <b>variabilidad entre ritmos minoritarios</b> siguen siendo los principales "
-        "retos metodológicos antes de pensar en aplicaciones clínicas. "
-        "Los próximos pasos claros son: completar la exportación de archivos de evaluación, "
-        "implementar estrategias de re-balanceo y explorar modelos que aprendan representaciones "
-        "directamente de la señal cruda."
-        "</p>"
+        f'<p style="color:var(--fg-1);font-size:15px;line-height:1.7;max-width:860px">'
+        f"El proyecto demuestra que es posible construir un <b>flujo reproducible y evaluado</b> "
+        f"para clasificar ritmos intraoperatorios a partir de <b>datos tabulares</b> "
+        f"(metadatos clínicos + intervalos RR por latido). "
+        f"El modelo <b>{_winner_nice}</b> obtiene F1-macro = {winner_f1_str} y "
+        f"distingue con mayor facilidad los ritmos dominantes (N y AFIB/AFL), "
+        f"mientras que las clases minoritarias (AVB, SVTA, VT) siguen siendo el principal reto. "
+        f"Sin embargo, el análisis también evidencia que el <b>desbalance severo de clases</b> "
+        f"y la <b>naturaleza acumulada de algunas variables intraoperatorias</b> son los principales "
+        f"retos metodológicos antes de pensar en aplicaciones clínicas. "
+        f"Los próximos pasos son: re-balanceo de clases, más iteraciones de búsqueda HP "
+        f"e integración de features de ritmo cardíaco más granulares."
+        f"</p>"
     )
     st.write("")
     callout(

@@ -12,11 +12,12 @@ from utils.loaders import load_classification_report, load_model_metadata
 # ── bootstrap ─────────────────────────────────────────────────────────────────
 meta = load_model_metadata()
 
+_winner_badge = meta.get("winner_model", "—").replace("_", " ").title() if meta else "—"
 page_header(
     "Evaluación por clase",
     "Desempeño del modelo ganador en cada tipo de arritmia. "
     "F1-score, soporte (ventanas de test) y análisis de clases difíciles.",
-    badge_html=badge_row(badge("LinearSVC", "winner"), badge("Análisis por clase", "info")),
+    badge_html=badge_row(badge(_winner_badge, "winner"), badge("Análisis por clase", "info")),
 )
 
 # ── load data ─────────────────────────────────────────────────────────────────
@@ -70,9 +71,10 @@ min_sup_val   = int(df_classes.loc[min_sup_row, sup_col]) if sup_col else 0
 callout(
     "info",
     "Nota metodológica",
-    "El reporte usa **test set independiente** (97 grupos de pacientes). "
+    "El reporte usa el <b>test set independiente</b> (split 80/20 por <code>case_id</code>). "
     "F1-score macro = promedio no ponderado entre clases — "
-    "clases con muy poco soporte impactan desproporcionadamente la métrica global.",
+    "clases con muy poco soporte impactan desproporcionadamente la métrica global. "
+    "El modelo activo usa features tabulares (metadatos clínicos + RR intervals).",
 )
 
 st.write("")
@@ -264,16 +266,17 @@ with st.expander("Metricas agregadas (macro / weighted avg)", expanded=False):
 st.write("")
 
 # ── interpretation callout ────────────────────────────────────────────────────
+_winner_name = meta.get("winner_model", "el modelo").replace("_", " ").title() if meta else "el modelo"
 if tier_good and sup_col:
     best_cls_sup = int(df_classes.loc[tier_good[0], sup_col])
     interp_body = (
-        f"El modelo LinearSVC clasifica bien las dos clases más frecuentes "
+        f"El modelo **{_winner_name}** clasifica mejor las clases con mayor soporte "
         f"(**{tier_good[0]}** F1={best_f1:.3f}, {best_cls_sup:,} ventanas), "
         f"pero tiene dificultades con clases poco representadas. "
         f"Las **{n_hard} clases difíciles** (F1 < 0.30) incluyen algunas con muy pocas ventanas de test "
         f"(p.ej. *{min_sup_row}*: {min_sup_val} ventanas), lo que limita la capacidad del modelo. "
         f"El F1-macro de **{avg_f1:.3f}** refleja este desequilibrio de clases. "
-        f"Estrategias como SMOTE o un clasificador 1D-CNN podrían mejorar las clases difíciles."
+        f"Estrategias como oversampling de clases minoritarias o más features RR podrían mejorar el rendimiento."
     )
 else:
     interp_body = (

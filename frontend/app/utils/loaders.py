@@ -5,86 +5,198 @@ import pandas as pd
 import streamlit as st
 
 from utils.paths import (
+    DATA_DIR,
     MODELS_DIR,
     REPORT_FIGURES_DIR,
     REPORT_TABLES_DIR,
 )
+
+TARGET_COLUMN = "rhythm_label"
 
 
 def file_exists(path: Path) -> bool:
     return Path(path).exists()
 
 
-@st.cache_data
-def load_model_comparison() -> pd.DataFrame | None:
-    path = REPORT_TABLES_DIR / "model_comparison.csv"
-    if not file_exists(path):
-        return None
-    return pd.read_csv(path)
+# ---------------------------------------------------------------------------
+# Normalizer: maps tabular metadata keys → superset compatible with legacy
+# ---------------------------------------------------------------------------
+def _normalize_metadata(raw: dict) -> dict:
+    out = dict(raw)
+    # trained_at → training_datetime
+    if "trained_at" in raw and "training_datetime" not in raw:
+        out["training_datetime"] = raw["trained_at"]
+    # numeric + categorical lists → n_features scalar
+    if "n_features" not in out:
+        n = len(raw.get("numeric_features", [])) + len(raw.get("categorical_features", []))
+        if n:
+            out["n_features"] = n
+    # best_params JSON string → best_hyperparams_per_model dict
+    if "best_hyperparams_per_model" not in out:
+        winner = raw.get("winner_model", "")
+        bp_str = raw.get("best_params", "")
+        if winner and bp_str:
+            try:
+                hp = json.loads(bp_str)
+                hp_clean = {
+                    k.replace("clf__", "").replace("preprocessor__", ""): v
+                    for k, v in hp.items()
+                }
+                out["best_hyperparams_per_model"] = {winner: hp_clean}
+            except Exception:
+                pass
+    return out
 
 
-@st.cache_data
-def load_classification_report() -> pd.DataFrame | None:
-    path = REPORT_TABLES_DIR / "best_model_classification_report.csv"
-    if not file_exists(path):
-        return None
-    return pd.read_csv(path, index_col=0)
-
-
-@st.cache_data
-def load_feature_importance() -> pd.DataFrame | None:
-    path = REPORT_TABLES_DIR / "best_model_feature_importance.csv"
-    if not file_exists(path):
-        return None
-    return pd.read_csv(path)
-
-
+# ---------------------------------------------------------------------------
+# Metadata
+# ---------------------------------------------------------------------------
 @st.cache_data
 def load_model_metadata() -> dict | None:
-    path = MODELS_DIR / "model_artifacts_metadata.json"
-    if not file_exists(path):
-        return None
-    with open(path, "r", encoding="utf-8") as fh:
-        return json.load(fh)
+    """Carga metadata del modelo. Prefiere tabular; fallback a legacy."""
+    candidates = [
+        (MODELS_DIR / "tabular_best_model_metadata.json", True),
+        (MODELS_DIR / "model_artifacts_metadata.json",    False),
+    ]
+    for path, is_tabular in candidates:
+        if file_exists(path):
+            with open(path, "r", encoding="utf-8") as fh:
+                raw = json.load(fh)
+            return _normalize_metadata(raw) if is_tabular else raw
+    return None
 
 
+# ---------------------------------------------------------------------------
+# Model comparison table
+# ---------------------------------------------------------------------------
+@st.cache_data
+def load_model_comparison() -> pd.DataFrame | None:
+    """Carga comparativa de modelos. Tabular-first (fusiona test + CV); fallback legacy."""
+    test_path = REPORT_TABLES_DIR / "tabular_model_comparison_test.csv"
+    cv_path   = REPORT_TABLES_DIR / "tabular_model_comparison_cv.csv"
+    if file_exists(test_path):
+        df_test = pd.read_csv(test_path)
+        if file_exists(cv_path):
+            df_cv = pd.read_csv(cv_path)
+            extra = ["model"] + [c for c in df_cv.columns if c not in df_test.columns]
+            df_test = df_test.merge(df_cv[extra], on="model", how="left")
+        return df_test
+    # Legacy fallback
+    path = REPORT_TABLES_DIR / "model_comparison.csv"
+    return pd.read_csv(path) if file_exists(path) else None
+
+
+# ---------------------------------------------------------------------------
+# Classification report (per-class)
+# ---------------------------------------------------------------------------
+@st.cache_data
+def load_classification_report() -> pd.DataFrame | None:
+    for fname in (
+        "tabular_best_model_classification_report.csv",
+        "best_model_classification_report.csv",
+    ):
+        path = REPORT_TABLES_DIR / fname
+        if file_exists(path):
+            return pd.read_csv(path, index_col=0)
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Feature importance
+# ---------------------------------------------------------------------------
+@st.cache_data
+def load_feature_importance() -> pd.DataFrame | None:
+    for fname in (
+        "tabular_feature_importance_best_model.csv",
+        "best_model_feature_importance.csv",
+    ):
+        path = REPORT_TABLES_DIR / fname
+        if file_exists(path):
+            return pd.read_csv(path)
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Feature column list
+# ---------------------------------------------------------------------------
 @st.cache_data
 def load_feature_columns() -> list | None:
-    path = MODELS_DIR / "feature_columns.json"
-    if not file_exists(path):
-        return None
-    with open(path, "r", encoding="utf-8") as fh:
-        return json.load(fh)
+    """Devuelve la lista de features del modelo activo."""
+    # Prefer tabular metadata (numeric + categorical lists)
+    path_meta = MODELS_DIR / "tabular_best_model_metadata.json"
+    if file_exists(path_meta):
+        with open(path_meta, "r", encoding="utf-8") as fh:
+            raw = json.load(fh)
+        numeric    = raw.get("numeric_features", [])
+        categorical = raw.get("categorical_features", [])
+        if numeric or categorical:
+            return numeric + categorical
+    # Legacy fallback
+    path_cols = MODELS_DIR / "feature_columns.json"
+    if file_exists(path_cols):
+        with open(path_cols, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    return None
 
 
+# ---------------------------------------------------------------------------
+# Trained pipeline (joblib)
+# ---------------------------------------------------------------------------
 @st.cache_resource
 def load_model():
-    path = MODELS_DIR / "best_model_pipeline.joblib"
+    for fname in ("tabular_best_model_pipeline.joblib", "best_model_pipeline.joblib"):
+        path = MODELS_DIR / fname
+        if file_exists(path):
+            try:
+                import joblib
+                return joblib.load(path)
+            except Exception:
+                continue
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Tabular parquet for prediction demo
+# ---------------------------------------------------------------------------
+@st.cache_data
+def load_tabular_parquet(n_sample: int = 300) -> "pd.DataFrame | None":
+    """Carga sample del dataset tabular procesado para la demo de predicción."""
+    path = DATA_DIR / "processed" / "filtered_tabular_modeling_dataset.parquet"
     if not file_exists(path):
         return None
     try:
-        import joblib
-        return joblib.load(path)
+        df = pd.read_parquet(path)
+        if len(df) > n_sample:
+            df = df.sample(n=n_sample, random_state=42).reset_index(drop=True)
+        return df
     except Exception:
         return None
 
 
+# ---------------------------------------------------------------------------
+# Confusion matrix
+# ---------------------------------------------------------------------------
 def confusion_matrix_figure_path() -> Path | None:
-    path = REPORT_FIGURES_DIR / "best_model_confusion_matrix.png"
-    return path if file_exists(path) else None
+    for fname in (
+        "tabular_best_model_confusion_matrix_absolute.png",
+        "best_model_confusion_matrix.png",
+    ):
+        path = REPORT_FIGURES_DIR / fname
+        if file_exists(path):
+            return path
+    return None
 
 
 @st.cache_data
 def load_confusion_matrix_csv() -> "pd.DataFrame | None":
-    """Load reports/tables/confusion_matrix.csv if it exists.
-
-    Expected format: real_label, predicted_label, count
-    Returns None if the file has not been exported yet.
-    """
-    path = REPORT_TABLES_DIR / "confusion_matrix.csv"
-    if not file_exists(path):
-        return None
-    return pd.read_csv(path)
+    for fname in (
+        "tabular_confusion_matrix_absolute.csv",
+        "confusion_matrix.csv",
+    ):
+        path = REPORT_TABLES_DIR / fname
+        if file_exists(path):
+            return pd.read_csv(path)
+    return None
 
 
 def correlation_figure_path() -> Path | None:

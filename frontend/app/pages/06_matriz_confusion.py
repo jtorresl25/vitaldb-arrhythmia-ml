@@ -15,13 +15,13 @@ from utils.loaders import (
 )
 
 # ── Bootstrap ─────────────────────────────────────────────────────────────────
-meta = load_model_metadata()
+meta   = load_model_metadata()
 winner = meta.get("winner_model", "—").replace("_", " ").title() if meta else "—"
 f1_str = f"{meta.get('winner_test_f1_macro', 0):.3f}" if meta else "—"
 page_header(
     "Matriz de confusión",
     "Análisis visual de aciertos y errores del modelo ganador entre clases de ritmo.",
-    badge_html=badge_row(badge("LinearSVC", "winner"), badge("Errores del modelo", "info")),
+    badge_html=badge_row(badge(winner, "winner"), badge("Errores del modelo", "info")),
 )
 
 # ── Load data ─────────────────────────────────────────────────────────────────
