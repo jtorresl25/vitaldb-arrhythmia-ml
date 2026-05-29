@@ -1,0 +1,16 @@
+pandas
+numpy
+matplotlib
+seaborn
+scikit-learn
+scipy
+tqdm
+vitaldb
+xgboost
+imbalanced-learn
+jupyter
+ipykernel
+joblib
+pytest
+pyarrow
+fastparquet
