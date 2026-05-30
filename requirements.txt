@@ -15,6 +15,7 @@ scikit-learn
 joblib
 pyarrow
 matplotlib
+pillow
 
 # Modelos ML (necesarios para deserializar el pipeline con joblib.load)
 xgboost
