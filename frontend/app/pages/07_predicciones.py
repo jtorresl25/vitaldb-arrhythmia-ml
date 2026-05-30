@@ -473,24 +473,6 @@ for _i, _dc in enumerate(_DEMO_CASES):
             st.session_state["_p7_source"]       = "demo"
             st.rerun()
 
-        if _cid == 337:
-            _frag_337 = _DEMO_FRAG_DIR / "case_337.npy"
-            if _frag_337.exists():
-                st.download_button(
-                    label="⬇ Descargar case_337.npy",
-                    data=_frag_337.read_bytes(),
-                    file_name="case_337.npy",
-                    mime="application/octet-stream",
-                    use_container_width=True,
-                    key="dl_case_337",
-                )
-                st.caption(
-                    "Este caso ya está cargado como demo. "
-                    "Si deseas probar la carga manual, descarga el .npy "
-                    "y súbelo desde la sección de exploración ECG."
-                )
-            else:
-                st.caption("Archivo .npy no incluido en esta versión desplegada.")
 
 st.write("")
 
