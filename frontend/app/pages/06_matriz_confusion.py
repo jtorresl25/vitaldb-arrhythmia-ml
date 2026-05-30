@@ -105,118 +105,124 @@ st.write("")
 # ── Main visualization ────────────────────────────────────────────────────────
 section_title("Visualización de la matriz")
 
-if has_csv:
-    # ── CASE A: Interactive Plotly heatmap ────────────────────────────────────
-    import numpy as np
-    import plotly.graph_objects as go
+import numpy as np
+import plotly.graph_objects as go
 
-    # Build square matrix from long-format CSV
-    required_cols = {"real_label", "predicted_label", "count"}
-    has_required  = required_cols.issubset(set(df_cm_csv.columns))
 
-    if has_required:
-        labels_all = sorted(
-            set(df_cm_csv["real_label"]).union(set(df_cm_csv["predicted_label"]))
-        )
-        n = len(labels_all)
-        idx_map = {lbl: i for i, lbl in enumerate(labels_all)}
-        matrix = np.zeros((n, n), dtype=float)
-        for _, row in df_cm_csv.iterrows():
+def _build_matrix_from_csv(df) -> "tuple[list, np.ndarray] | None":
+    """Intenta construir (labels, matrix_2d) desde el CSV.
+
+    Soporta dos formatos:
+    - Long format: columnas real_label, predicted_label, count
+    - Wide format: índice = clases reales, columnas = clases predichas
+    """
+    if df is None:
+        return None
+
+    long_cols = {"real_label", "predicted_label", "count"}
+    if long_cols.issubset(set(df.columns)):
+        labels = sorted(set(df["real_label"]).union(set(df["predicted_label"])))
+        idx_map = {lbl: i for i, lbl in enumerate(labels)}
+        mat = np.zeros((len(labels), len(labels)), dtype=float)
+        for _, row in df.iterrows():
             r = idx_map.get(str(row["real_label"]))
             c = idx_map.get(str(row["predicted_label"]))
             if r is not None and c is not None:
-                matrix[r, c] = float(row["count"])
+                mat[r, c] = float(row["count"])
+        return labels, mat
 
-        col_view, _ = st.columns([3, 1])
-        with col_view:
-            view = st.selectbox(
-                "Vista",
-                ["Conteos absolutos", "Normalizado por fila (recall %)"],
-                index=0,
-            )
+    # Wide format: numeric columns, row index = real classes
+    try:
+        numeric_cols = [c for c in df.columns if df[c].dtype.kind in ("i", "u", "f")]
+        if len(numeric_cols) > 0 and len(df) > 0:
+            labels = sorted(set(df.index.astype(str).tolist() + [str(c) for c in numeric_cols]))
+            idx_map = {lbl: i for i, lbl in enumerate(labels)}
+            mat = np.zeros((len(labels), len(labels)), dtype=float)
+            for real_lbl in df.index:
+                r = idx_map.get(str(real_lbl))
+                if r is None:
+                    continue
+                for pred_lbl in numeric_cols:
+                    c = idx_map.get(str(pred_lbl))
+                    if c is not None:
+                        mat[r, c] = float(df.loc[real_lbl, pred_lbl])
+            return labels, mat
+    except Exception:
+        pass
 
-        display_matrix = matrix.copy()
-        fmt_str        = ".0f"
-        if view == "Normalizado por fila (recall %)":
-            row_sums = matrix.sum(axis=1, keepdims=True)
-            row_sums[row_sums == 0] = 1
-            display_matrix = matrix / row_sums
-            fmt_str = ".2%"
+    return None
 
-        text_matrix = [[f"{v:{fmt_str}}" for v in row] for row in display_matrix]
 
-        fig = go.Figure(go.Heatmap(
-            z=display_matrix.tolist(),
-            x=labels_all,
-            y=labels_all,
-            text=text_matrix,
-            texttemplate="%{text}",
-            textfont=dict(size=9, family="IBM Plex Mono, monospace"),
-            colorscale="Teal",
-            colorbar=dict(
-                title="",
-                tickfont=dict(size=9, family="IBM Plex Mono, monospace"),
-            ),
-            hovertemplate=(
-                "Real: <b>%{y}</b><br>"
-                "Predicho: <b>%{x}</b><br>"
-                "Valor: %{z}<extra></extra>"
-            ),
-        ))
-        fig.update_layout(
-            plot_bgcolor="#121a2b",
-            paper_bgcolor="rgba(0,0,0,0)",
-            font=dict(family="IBM Plex Mono, monospace", color="#8a98b5", size=10),
-            height=560,
-            margin=dict(l=10, r=10, t=20, b=10),
-            xaxis=dict(
-                title="Clase predicha",
-                tickfont=dict(size=9),
-                side="bottom",
-            ),
-            yaxis=dict(
-                title="Clase real",
-                tickfont=dict(size=9),
-                autorange="reversed",
-            ),
+def _render_heatmap(labels: list, matrix: np.ndarray) -> None:
+    col_view, _ = st.columns([3, 1])
+    with col_view:
+        view = st.selectbox(
+            "Vista",
+            ["Conteos absolutos", "Normalizado por fila (recall %)"],
+            index=0,
+            key="cm_view_select",
         )
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-    else:
-        callout(
-            "warn",
-            "Formato CSV inesperado",
-            f"Se esperan columnas <code>real_label</code>, <code>predicted_label</code>, "
-            f"<code>count</code>. Columnas encontradas: {list(df_cm_csv.columns)}",
-        )
-        if has_png:
-            st.image(str(cm_png_path), use_container_width=True)
 
-else:
-    # ── CASE B: PNG fallback ──────────────────────────────────────────────────
+    display_matrix = matrix.copy()
+    fmt_str = ".0f"
+    if view == "Normalizado por fila (recall %)":
+        row_sums = matrix.sum(axis=1, keepdims=True)
+        row_sums[row_sums == 0] = 1
+        display_matrix = matrix / row_sums
+        fmt_str = ".2%"
+
+    text_matrix = [[f"{v:{fmt_str}}" for v in row] for row in display_matrix]
+
+    fig = go.Figure(go.Heatmap(
+        z=display_matrix.tolist(),
+        x=labels,
+        y=labels,
+        text=text_matrix,
+        texttemplate="%{text}",
+        textfont=dict(size=9, family="IBM Plex Mono, monospace"),
+        colorscale="Teal",
+        colorbar=dict(title="", tickfont=dict(size=9, family="IBM Plex Mono, monospace")),
+        hovertemplate="Real: <b>%{y}</b><br>Predicho: <b>%{x}</b><br>Valor: %{z}<extra></extra>",
+    ))
+    fig.update_layout(
+        plot_bgcolor="#121a2b",
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="IBM Plex Mono, monospace", color="#8a98b5", size=10),
+        height=560,
+        margin=dict(l=10, r=10, t=20, b=10),
+        xaxis=dict(title="Clase predicha", tickfont=dict(size=9), side="bottom"),
+        yaxis=dict(title="Clase real", tickfont=dict(size=9), autorange="reversed"),
+    )
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+
+_cm_result = _build_matrix_from_csv(df_cm_csv)
+
+if _cm_result is not None:
+    _labels_all, _matrix = _cm_result
+    _render_heatmap(_labels_all, _matrix)
     if has_png:
-        with st.container(border=True):
-            card_header(
-                "Matriz de confusión",
-                "imagen exportada por el pipeline",
-                right_html=badge("PNG", "ok"),
-            )
+        with st.expander("Ver imagen exportada (PNG)"):
             st.image(str(cm_png_path), use_container_width=True)
-
-        callout(
-            "info",
-            "Heatmap interactivo no disponible",
-            "Por ahora se muestra la matriz exportada como imagen. "
-            "Para habilitar filtros interactivos y normalización por fila, "
-            "exporta <code>reports/tables/confusion_matrix.csv</code> desde el notebook de evaluación "
-            "(ver sección de recomendación técnica al final de esta página).",
-        )
-    else:
-        callout(
-            "warn",
-            "Ninguna visualización disponible",
-            "No se encontró ni el PNG ni el CSV de la matriz de confusión. "
-            "Ejecuta el pipeline de evaluación para generarlos.",
-        )
+elif has_png:
+    callout(
+        "info",
+        "CSV no disponible — mostrando imagen exportada",
+        "Para habilitar el heatmap interactivo con normalización por fila, "
+        "exporta <code>reports/tables/tabular_confusion_matrix_absolute.csv</code> "
+        "desde el pipeline de evaluación.",
+    )
+    st.image(str(cm_png_path), use_container_width=True)
+else:
+    st.html(
+        '<div class="placeholder-block" style="min-height:180px;padding:32px">'
+        '<div class="ph-mono">datos no disponibles</div>'
+        '<div class="ph-title">Heatmap interactivo</div>'
+        '<div class="ph-desc">Ejecuta el pipeline de evaluación para generar '
+        '<code>reports/tables/tabular_confusion_matrix_absolute.csv</code>. '
+        'El heatmap se cargará automáticamente al estar disponible el archivo.</div>'
+        '</div>'
+    )
 
 st.write("")
 

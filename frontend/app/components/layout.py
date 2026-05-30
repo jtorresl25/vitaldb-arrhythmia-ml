@@ -21,45 +21,22 @@ def inject_css() -> None:
 
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 
-def sidebar_branding(
-    winner_model: str = "—",
-    winner_f1: str = "—",
-    pipeline_ok: bool = True,
-) -> None:
-    """Render the custom sidebar branding block (title, subtitle, status).
-
-    Uses st.sidebar.markdown() so that CSS classes from styles.css apply
-    (st.sidebar.html() renders in an isolated iframe where global CSS does not reach).
-    """
-    status_color = "var(--ok)" if pipeline_ok else "var(--err)"
-    status_text  = "&#x25CF; ok" if pipeline_ok else "&#x25CF; error"
-
+def sidebar_branding() -> None:
+    """Render a minimal project identifier in the sidebar."""
     st.sidebar.markdown(
         '<div class="sb-brand">'
         '<div class="sb-title">ECG Arrhythmia ML</div>'
-        '<div class="sb-sub">Clasificación de ritmos intraoperatorios</div>'
+        '<div class="sb-sub">VitalDB · Clasificación de arritmias</div>'
         '</div>',
         unsafe_allow_html=True,
     )
-
     st.sidebar.markdown(
-        f'<div class="sb-status">'
-        f'<div style="margin-bottom:8px">'
-        f'<span class="sb-stamp">DEMO ACADÉMICA</span>'
-        f'</div>'
-        f'<div class="sb-status-row">'
-        f'<span class="sb-status-key">pipeline</span>'
-        f'<span style="color:{status_color}">{status_text}</span>'
-        f'</div>'
-        f'<div class="sb-status-row">'
-        f'<span class="sb-status-key">best model</span>'
-        f'<span class="sb-status-val">{winner_model}</span>'
-        f'</div>'
-        f'<div class="sb-status-row">'
-        f'<span class="sb-status-key">F1-macro</span>'
-        f'<span class="sb-status-val">{winner_f1}</span>'
-        f'</div>'
-        f'</div>',
+        '<div style="margin:4px 0 14px;padding:5px 10px;'
+        'background:rgba(251,191,36,0.07);border-left:2px solid rgba(251,191,36,0.4);'
+        'border-radius:0 4px 4px 0;font-size:10px;color:var(--fg-4);'
+        'font-family:var(--mono);letter-spacing:.05em">'
+        'Demo académica · no uso clínico'
+        '</div>',
         unsafe_allow_html=True,
     )
 

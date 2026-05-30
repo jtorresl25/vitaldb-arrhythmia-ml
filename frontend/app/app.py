@@ -30,13 +30,8 @@ pg = st.navigation(pages)
 
 # ── Shared setup (runs on every page) ────────────────────────────────────────
 from components.layout import inject_css, sidebar_branding
-from utils.loaders import load_model_metadata
 
 inject_css()
-
-_meta   = load_model_metadata()
-_winner = _meta.get("winner_model", "—").replace("_", " ").title() if _meta else "—"
-_f1     = f"{_meta.get('winner_test_f1_macro', 0):.3f}" if _meta else "—"
-sidebar_branding(winner_model=_winner, winner_f1=_f1, pipeline_ok=_meta is not None)
+sidebar_branding()
 
 pg.run()

@@ -26,6 +26,7 @@ acc_val     = None
 prec_val    = None
 rec_val     = None
 
+# Prefer comparison CSV; fallback to winner_metrics inside metadata JSON
 if df_cmp is not None and winner_raw != "—" and "model" in df_cmp.columns:
     winner_row_df = df_cmp[df_cmp["model"] == winner_raw]
     if winner_row_df.empty:
@@ -36,6 +37,11 @@ if df_cmp is not None and winner_raw != "—" and "model" in df_cmp.columns:
         acc_val  = winner_row_df["test_accuracy"].iloc[0]          if "test_accuracy"          in winner_row_df.columns else None
         prec_val = winner_row_df["test_precision_macro"].iloc[0]   if "test_precision_macro"   in winner_row_df.columns else None
         rec_val  = winner_row_df["test_recall_macro"].iloc[0]      if "test_recall_macro"      in winner_row_df.columns else None
+elif meta and "winner_metrics" in meta:
+    wm       = meta["winner_metrics"]
+    acc_val  = wm.get("test_accuracy")
+    prec_val = wm.get("test_precision_macro")
+    rec_val  = wm.get("test_recall_macro")
 
 # Derive counts from metadata (tabular metadata may not include all fields)
 train_rows  = meta.get("train_size_rows", 0) if meta else 0
@@ -51,7 +57,7 @@ if df_cls is not None:
     _summary = {"accuracy", "macro avg", "weighted avg"}
     n_classes = len([i for i in df_cls.index if i.lower() not in _summary])
 else:
-    n_classes = 10
+    n_classes = 10  # known number of rhythm classes in VitalDB dataset
 
 # Count real models from comparison csv
 n_models = len(df_cmp) if df_cmp is not None else 5
@@ -101,45 +107,24 @@ st.plotly_chart(ecg_fig, use_container_width=True, config={"displayModeBar": Fal
 # ── MÉTRICAS PRINCIPALES ──────────────────────────────────────────────────────
 section_title("Resumen del proyecto")
 
-col1, col2, col3, col4 = st.columns(4)
-with col1:
-    _cases_str  = str(total_cases) if total_cases > 0 else "—"
-    _groups_str = (f"{n_train_grp} train · {n_test_grp} test"
-                   if n_train_grp > 0 else "split 80/20 por case_id")
-    metric_card(
-        "Casos quirúrgicos",
-        _cases_str,
-        helper=_groups_str,
-        accent="blue",
-        helper_kind="muted",
-    )
-with col2:
-    _rows_str   = f"{total_rows:,}".replace(",", " ") if total_rows > 0 else "—"
-    _detail_str = (f"train {train_rows:,} · test {test_rows:,}".replace(",", " ")
-                   if total_rows > 0 else "latidos anotados · flujo tabular")
-    metric_card(
-        "Latidos anotados",
-        _rows_str,
-        helper=_detail_str,
-        accent="teal",
-        helper_kind="muted",
-    )
-with col3:
-    metric_card(
-        "Clases de ritmo",
-        str(n_classes),
-        helper="clasificación multiclase",
-        accent="warn",
-        helper_kind="muted",
-    )
-with col4:
-    metric_card(
-        "Modelos comparados",
-        str(n_models),
-        helper="baseline + búsqueda HP",
-        accent="blue",
-        helper_kind="muted",
-    )
+_metric_cols = []
+if total_cases > 0:
+    _metric_cols.append(("Casos quirúrgicos", str(total_cases),
+                         f"{n_train_grp} train · {n_test_grp} test", "blue"))
+if total_rows > 0:
+    _metric_cols.append(("Latidos anotados",
+                         f"{total_rows:,}".replace(",", " "),
+                         f"train {train_rows:,} · test {test_rows:,}".replace(",", " "),
+                         "teal"))
+_metric_cols.append(("Clases de ritmo", str(n_classes), "clasificación multiclase", "warn"))
+_metric_cols.append(("Modelos comparados", str(n_models), "baseline + búsqueda HP", "blue"))
+if f1_val is not None:
+    _metric_cols.append(("F1-macro (test)", f1_str, winner_nice, "teal"))
+
+_mc = st.columns(len(_metric_cols))
+for _col, (_label, _val, _helper, _accent) in zip(_mc, _metric_cols):
+    with _col:
+        metric_card(_label, _val, helper=_helper, accent=_accent, helper_kind="muted")
 
 st.markdown("<div style='margin-top:8px'></div>", unsafe_allow_html=True)
 
@@ -228,8 +213,16 @@ with col_c:
                 f"Ganador: {winner_nice} · F1-macro={f1_str} "
                 f"(métrica principal: promedio uniforme por clase)"
             )
-        else:
-            st.warning("model_comparison.csv no encontrado.")
+        elif meta and "winner_metrics" in meta:
+            wm = meta["winner_metrics"]
+            kv_table([
+                ("Modelo ganador",  winner_nice),
+                ("F1-macro test",   f1_str),
+                ("F1-weighted",     f"{wm.get('test_f1_weighted', 0):.3f}"),
+                ("Accuracy",        f"{wm.get('test_accuracy', 0):.3f}"),
+                ("F1-macro CV",     f"{wm.get('cv_f1_macro', 0):.3f}"),
+            ])
+            st.caption("Tabla de comparación completa disponible al exportar model_comparison.csv")
 
 # ── AVISO ──────────────────────────────────────────────────────────────────────
 st.markdown("<div style='margin-top:20px'></div>", unsafe_allow_html=True)
