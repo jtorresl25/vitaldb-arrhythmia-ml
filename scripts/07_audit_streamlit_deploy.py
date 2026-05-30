@@ -60,19 +60,15 @@ REQUIRED: list[tuple[Path, str]] = [
      "Candidatos demo por categoría"),
     (APP_ARTIFACTS / "demo" / "demo_cases_binary.csv",
      "Catálogo de casos demo"),
-    (APP_ARTIFACTS / "demo" / "case_features" / "case_337.parquet",
-     "Features tabulares case_337 (mixto)"),
     (APP_ARTIFACTS / "demo" / "case_features" / "case_5377.parquet",
      "Features tabulares case_5377 (normal)"),
     (APP_ARTIFACTS / "demo" / "case_features" / "case_2040.parquet",
      "Features tabulares case_2040 (anormal)"),
     (APP_ARTIFACTS / "demo" / "case_features" / "case_1996.parquet",
-     "Features tabulares case_1996 (mixto adicional)"),
+     "Features tabulares case_1996 (mixto)"),
 ]
 
 OPTIONAL: list[tuple[Path, str]] = [
-    (APP_ARTIFACTS / "demo" / "npy_cases" / "case_337.npy",
-     "ECG .npy case_337"),
     (APP_ARTIFACTS / "demo" / "npy_cases" / "case_5377.npy",
      "ECG .npy case_5377"),
     (APP_ARTIFACTS / "demo" / "npy_cases" / "case_2040.npy",

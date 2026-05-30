@@ -1,5 +1,4 @@
 case_id,title,binary_type,description,expected_pattern,n_beats,accuracy,balanced_accuracy,precision_abnormal,recall_abnormal,f1_abnormal,specificity_normal,notes
 5377,Normal estable,normal,Caso casi completamente normal con 1165 de 1169 registros normales. El modelo lo clasifica correctamente.,Mayoría normales,1169,1.0,1.0,1.0,1.0,1.0,1.0,Seleccionado como normal_good. recall_abnormal=1.000
 2040,Anormal claro,abnormal,Caso 100% anormal detectado correctamente por el modelo.,Todos anormales,1045,1.0,,1.0,1.0,1.0,,Seleccionado como abnormal_good. recall_abnormal=1.000
-337,Mixto representativo,mixed,Caso con proporción balanceada entre normal y anormal. El modelo alcanza accuracy de 0.784.,Mezcla normal/anormal,925,0.7838,0.7856,0.7452,0.8112,0.7768,0.7601,Seleccionado como mixed_good. recall_abnormal=0.811
-1996,Mixto adicional,mixed,Caso con presencia de registros Normal y Anormal. El modelo alcanza accuracy de 0.754 y recall anormal de 0.771.,Normal + Anormal,724,0.7541,0.6277,0.5556,0.7706,0.6452,0.4848,Caso demo seleccionado por rendimiento en evaluación por caso.
+1996,Mixto representativo,mixed,Caso con presencia de registros Normal y Anormal. El modelo alcanza accuracy de 0.754 y recall anormal de 0.771.,Normal + Anormal,724,0.7541,0.6277,0.5556,0.7706,0.6452,0.4848,Caso demo seleccionado por rendimiento en evaluacion por caso.

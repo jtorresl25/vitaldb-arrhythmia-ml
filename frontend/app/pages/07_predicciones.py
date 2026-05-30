@@ -163,14 +163,7 @@ _DEMO_CASES_FALLBACK: list[dict] = [
         "accuracy": 1.0, "recall_abnormal": 1.0, "notes": "",
     },
     {
-        "case_id": 337, "title": "Mixto representativo", "binary_type": "mixed",
-        "description": "Proporción balanceada entre normal y anormal. "
-                       "El modelo alcanza accuracy de 0.784.",
-        "expected_pattern": "Mezcla normal/anormal", "n_beats": 925,
-        "accuracy": 0.784, "recall_abnormal": 0.811, "notes": "",
-    },
-    {
-        "case_id": 1996, "title": "Mixto adicional", "binary_type": "mixed",
+        "case_id": 1996, "title": "Mixto representativo", "binary_type": "mixed",
         "description": "Caso con presencia de registros Normal y Anormal. "
                        "El modelo alcanza accuracy de 0.754 y recall anormal de 0.771.",
         "expected_pattern": "Normal + Anormal", "n_beats": 724,
@@ -1024,30 +1017,11 @@ if _is_case_a:
                 callout("warn", "Señal no disponible",
                         "No hay muestras suficientes para graficar.")
             else:
-                # Defaults de inicio y duración
-                _cid_int = int(_active_cid) if _active_cid is not None else -1
-                if _cid_int == 337:
-                    _vstart_def   = min(589.0, max(0.0, _duration_available - 5.0))
-                    _vdur_def     = min(80.0,  max(5.0, _duration_available - _vstart_def))
-                    if _vdur_def < 5.0:
-                        _vstart_def = max(0.0, _duration_available - 80.0)
-                        _vdur_def   = min(80.0, _duration_available - _vstart_def)
-                else:
-                    _vstart_def = 0.0
-                    _vdur_def   = min(120.0, _duration_available)
+                # Defaults de inicio y duración (igual para todos los casos)
+                _vstart_def = 0.0
+                _vdur_def   = min(120.0, _duration_available)
 
                 _ecg_key_pfx = str(_active_cid) if _active_cid is not None else "uploaded"
-
-                # Para case 337: si el session_state guarda un inicio < 100 de una
-                # sesión previa, descartarlo para que el default 589 tenga efecto.
-                if _cid_int == 337:
-                    _sk_start = f"ecg_view_start_{_ecg_key_pfx}"
-                    if _sk_start in st.session_state:
-                        try:
-                            if float(st.session_state[_sk_start]) < 100:
-                                del st.session_state[_sk_start]
-                        except Exception:
-                            del st.session_state[_sk_start]
 
                 # Slider 1 — inicio relativo
                 _max_start = max(0.0, _duration_available - 1.0)
