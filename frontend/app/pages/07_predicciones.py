@@ -520,6 +520,9 @@ for _i, _dc in enumerate(_DEMO_CASES):
             st.session_state["_p7_feat_df"]      = None
             st.session_state["_p7_predictions"]  = None
             st.session_state["_p7_source"]       = "demo"
+            for _sk in list(st.session_state.keys()):
+                if _sk.startswith("ecg_view_start_") or _sk.startswith("ecg_view_duration_"):
+                    del st.session_state[_sk]
             st.rerun()
 
 
@@ -577,6 +580,9 @@ if _uploaded is not None:
         st.session_state["_p7_predictions"] = None
         st.session_state["_p7_source"]      = "upload"
         st.session_state["_p7_upload_file"] = _uploaded
+        for _sk in list(st.session_state.keys()):
+            if _sk.startswith("ecg_view_start_") or _sk.startswith("ecg_view_duration_"):
+                del st.session_state[_sk]
         st.rerun()
 
 # ---------------------------------------------------------------------------
@@ -1031,6 +1037,17 @@ if _is_case_a:
                     _vdur_def   = min(120.0, _duration_available)
 
                 _ecg_key_pfx = str(_active_cid) if _active_cid is not None else "uploaded"
+
+                # Para case 337: si el session_state guarda un inicio < 100 de una
+                # sesión previa, descartarlo para que el default 589 tenga efecto.
+                if _cid_int == 337:
+                    _sk_start = f"ecg_view_start_{_ecg_key_pfx}"
+                    if _sk_start in st.session_state:
+                        try:
+                            if float(st.session_state[_sk_start]) < 100:
+                                del st.session_state[_sk_start]
+                        except Exception:
+                            del st.session_state[_sk_start]
 
                 # Slider 1 — inicio relativo
                 _max_start = max(0.0, _duration_available - 1.0)
