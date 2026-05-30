@@ -1,366 +1,330 @@
+"""Página 06 — Matriz de confusión binaria normal/anormal."""
+
 import streamlit as st
-
+import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 
-from components.layout import page_header
-from components.cards import callout, card_header, kv_table, metric_card, section_title
+from components.layout import page_header, page_footer
+from components.cards  import callout, card_header, kv_table, metric_card, section_title
 from components.badges import badge, badge_row
-from components.charts import class_f1_bar
-from components.tables import class_report_table
 from utils.loaders import (
-    load_classification_report,
     load_confusion_matrix_csv,
+    load_binary_metrics,
     load_model_metadata,
     confusion_matrix_figure_path,
 )
 
-# ── Bootstrap ─────────────────────────────────────────────────────────────────
+# ── Constants ──────────────────────────────────────────────────────────────────
+_LABELS = ["Normal", "Anormal"]
+
+_LABEL_MAP = {
+    "n": "Normal", "normal": "Normal", "0": "Normal",
+    "abnormal": "Anormal", "anormal": "Anormal", "1": "Anormal",
+    "no n": "Anormal", "not n": "Anormal",
+}
+
+def _norm(x: str) -> str:
+    return _LABEL_MAP.get(str(x).strip().lower(), str(x).title())
+
+
+# ── Bootstrap ──────────────────────────────────────────────────────────────────
 meta   = load_model_metadata()
 winner = meta.get("winner_model", "—").replace("_", " ").title() if meta else "—"
-f1_str = f"{meta.get('winner_test_f1_macro', 0):.3f}" if meta else "—"
+
 page_header(
     "Matriz de confusión",
-    "Análisis visual de aciertos y errores del modelo ganador entre clases de ritmo.",
-    badge_html=badge_row(badge(winner, "winner"), badge("Errores del modelo", "info")),
+    "Evaluación binaria del modelo final: Normal vs Anormal.",
+    badge_html=badge_row(badge(winner, "winner"), badge("Binario", "ok")),
 )
 
-# ── Load data ─────────────────────────────────────────────────────────────────
-df_cls_raw   = load_classification_report()
-df_cm_csv    = load_confusion_matrix_csv()
-cm_png_path  = confusion_matrix_figure_path()
-
-SUMMARY_ROWS = {"accuracy", "macro avg", "weighted avg"}
-
-df_classes = None
-if df_cls_raw is not None:
-    df_classes = df_cls_raw[~df_cls_raw.index.isin(SUMMARY_ROWS)].copy()
-    for col in ["precision", "recall", "f1-score", "support"]:
-        if col in df_classes.columns:
-            df_classes[col] = pd.to_numeric(df_classes[col], errors="coerce")
-
-has_csv = df_cm_csv is not None
-has_png = cm_png_path is not None
-has_cls = df_classes is not None and not df_classes.empty
-
-# ── Callout metodológico ──────────────────────────────────────────────────────
+# ── Callout metodológico ───────────────────────────────────────────────────────
 callout(
     "info",
-    "Cómo leer una matriz de confusión",
+    "Cómo leer esta matriz",
     "<b>Filas</b> = clase real &nbsp;·&nbsp; "
     "<b>Columnas</b> = clase predicha &nbsp;·&nbsp; "
-    "<b>Diagonal</b> = predicciones correctas (aciertos) &nbsp;·&nbsp; "
-    "<b>Fuera de diagonal</b> = confusiones (errores). "
-    "En datasets desbalanceados, la <i>accuracy</i> puede parecer alta aunque el modelo "
-    "falle completamente en clases minoritarias — la matriz revela estos errores ocultos. "
-    "El <b>recall</b> de cada clase = aciertos en esa clase / total real de esa clase = "
-    "valor en la diagonal dividido por la suma de la fila.",
+    "<b>Diagonal</b> = predicciones correctas. "
+    "En un problema binario: "
+    "<b>TN</b> = Normal detectado como Normal &nbsp;·&nbsp; "
+    "<b>TP</b> = Anormal detectado como Anormal &nbsp;·&nbsp; "
+    "<b>FP</b> = Normal clasificado como Anormal (falsa alarma) &nbsp;·&nbsp; "
+    "<b>FN</b> = Anormal clasificado como Normal (caso no detectado). "
+    "Los <b>FN son especialmente críticos</b>: representan anormalidades no detectadas.",
 )
 
 st.write("")
 
-# ── KPIs ─────────────────────────────────────────────────────────────────────
-section_title("Estado de los datos")
-
-n_classes    = len(df_classes) if has_cls else 0
-total_sup    = int(df_classes["support"].sum()) if has_cls and "support" in df_classes.columns else 0
-best_rec_cls = df_classes["recall"].idxmax() if has_cls and "recall" in df_classes.columns else "—"
-worst_rec_cls= df_classes["recall"].idxmin() if has_cls and "recall" in df_classes.columns else "—"
-best_rec_val = float(df_classes.loc[best_rec_cls, "recall"]) if has_cls and best_rec_cls != "—" else 0.0
-worst_rec_val= float(df_classes.loc[worst_rec_cls, "recall"]) if has_cls and worst_rec_cls != "—" else 0.0
-
-c1, c2, c3, c4, c5, c6 = st.columns(6)
-with c1:
-    metric_card("Clases evaluadas", str(n_classes), "tipos de ritmo", accent="blue")
-with c2:
-    metric_card("Test windows", f"{total_sup:,}", "ventanas evaluadas", accent="blue")
-with c3:
-    metric_card(
-        "Mejor recall",
-        f"{best_rec_val:.3f}",
-        best_rec_cls,
-        accent="teal",
-        helper_kind="ok",
-    )
-with c4:
-    metric_card(
-        "Peor recall",
-        f"{worst_rec_val:.3f}",
-        worst_rec_cls,
-        accent="err",
-        helper_kind="warn",
-    )
-with c5:
-    if has_png:
-        metric_card("Matriz PNG", "disponible", "reports/figures/", accent="ok", helper_kind="ok")
-    else:
-        metric_card("Matriz PNG", "no encontrada", "reports/figures/", accent="err", helper_kind="warn")
-with c6:
-    if has_csv:
-        metric_card("Matriz CSV", "disponible", "heatmap interactivo", accent="teal", helper_kind="ok")
-    else:
-        metric_card("Matriz CSV", "pendiente", "reports/tables/", accent="warn", helper_kind="warn")
-
-st.write("")
-
-# ── Main visualization ────────────────────────────────────────────────────────
-section_title("Visualización de la matriz")
-
-import numpy as np
-import plotly.graph_objects as go
+# ── Load data ──────────────────────────────────────────────────────────────────
+df_cm_csv  = load_confusion_matrix_csv()
+df_bin_met = load_binary_metrics()
+cm_png     = confusion_matrix_figure_path()
 
 
-def _build_matrix_from_csv(df) -> "tuple[list, np.ndarray] | None":
-    """Intenta construir (labels, matrix_2d) desde el CSV.
-
-    Soporta dos formatos:
-    - Long format: columnas real_label, predicted_label, count
-    - Wide format: índice = clases reales, columnas = clases predichas
-    """
+# ── Matrix parser ──────────────────────────────────────────────────────────────
+def _parse_matrix(df: "pd.DataFrame | None") -> "np.ndarray | None":
+    """Return 2×2 ndarray [Normal row, Anormal row] × [Normal col, Anormal col]."""
     if df is None:
         return None
 
-    long_cols = {"real_label", "predicted_label", "count"}
-    if long_cols.issubset(set(df.columns)):
-        labels = sorted(set(df["real_label"]).union(set(df["predicted_label"])))
-        idx_map = {lbl: i for i, lbl in enumerate(labels)}
-        mat = np.zeros((len(labels), len(labels)), dtype=float)
-        for _, row in df.iterrows():
-            r = idx_map.get(str(row["real_label"]))
-            c = idx_map.get(str(row["predicted_label"]))
-            if r is not None and c is not None:
-                mat[r, c] = float(row["count"])
-        return labels, mat
+    idx = {"Normal": 0, "Anormal": 1}
+    mat = np.zeros((2, 2), dtype=float)
 
-    # Wide format: numeric columns, row index = real classes
+    # Long format: real_label / y_true / true_label  +  predicted_label / y_pred  +  count
+    real_col = next(
+        (c for c in df.columns if c.lower() in ("real_label", "y_true", "true_label")), None
+    )
+    pred_col = next(
+        (c for c in df.columns if c.lower() in ("predicted_label", "y_pred", "pred_label")), None
+    )
+    cnt_col = next(
+        (c for c in df.columns if c.lower() in ("count", "value", "n")), None
+    )
+
+    if real_col and pred_col and cnt_col:
+        for _, row in df.iterrows():
+            r = idx.get(_norm(str(row[real_col])))
+            c = idx.get(_norm(str(row[pred_col])))
+            if r is not None and c is not None:
+                mat[r, c] += float(row[cnt_col])
+        return mat if mat.sum() > 0 else None
+
+    # Wide format: first column = row label (true_class), rest = predicted columns
     try:
-        numeric_cols = [c for c in df.columns if df[c].dtype.kind in ("i", "u", "f")]
-        if len(numeric_cols) > 0 and len(df) > 0:
-            labels = sorted(set(df.index.astype(str).tolist() + [str(c) for c in numeric_cols]))
-            idx_map = {lbl: i for i, lbl in enumerate(labels)}
-            mat = np.zeros((len(labels), len(labels)), dtype=float)
-            for real_lbl in df.index:
-                r = idx_map.get(str(real_lbl))
-                if r is None:
+        df2 = df.set_index(df.columns[0]).copy()
+        valid_rows = [r for r in df2.index if _norm(str(r)) in ("Normal", "Anormal")]
+        valid_cols = [c for c in df2.columns if _norm(str(c)) in ("Normal", "Anormal")]
+        if not valid_rows or not valid_cols:
+            return None
+        df2 = df2.loc[valid_rows, valid_cols]
+        for real_raw in df2.index:
+            ri = idx.get(_norm(str(real_raw)))
+            if ri is None:
+                continue
+            for pred_raw in df2.columns:
+                ci = idx.get(_norm(str(pred_raw)))
+                if ci is None:
                     continue
-                for pred_lbl in numeric_cols:
-                    c = idx_map.get(str(pred_lbl))
-                    if c is not None:
-                        mat[r, c] = float(df.loc[real_lbl, pred_lbl])
-            return labels, mat
+                mat[ri, ci] = float(df2.loc[real_raw, pred_raw])
+        return mat if mat.sum() > 0 else None
     except Exception:
         pass
 
     return None
 
 
-def _render_heatmap(labels: list, matrix: np.ndarray) -> None:
-    col_view, _ = st.columns([3, 1])
+mat = _parse_matrix(df_cm_csv)
+
+# ── Derive / load metrics ──────────────────────────────────────────────────────
+def _safe_float(v) -> "float | None":
+    try:
+        f = float(v)
+        return None if np.isnan(f) else f
+    except (TypeError, ValueError):
+        return None
+
+if df_bin_met is not None and not df_bin_met.empty:
+    _r = df_bin_met.iloc[0]
+    tn   = int(_safe_float(_r.get("tn_normal",              0)) or 0)
+    fp   = int(_safe_float(_r.get("fp_abnormal_false_alarm",0)) or 0)
+    fn   = int(_safe_float(_r.get("fn_abnormal_missed",     0)) or 0)
+    tp   = int(_safe_float(_r.get("tp_abnormal",            0)) or 0)
+    acc  = _safe_float(_r.get("accuracy"))
+    sens = _safe_float(_r.get("sensitivity_recall_abnormal"))
+    spec = _safe_float(_r.get("specificity_recall_normal"))
+    prec = _safe_float(_r.get("precision_abnormal"))
+    f1   = _safe_float(_r.get("f1_abnormal"))
+elif mat is not None:
+    tn, fp, fn, tp = int(mat[0, 0]), int(mat[0, 1]), int(mat[1, 0]), int(mat[1, 1])
+    total = tn + fp + fn + tp or 1
+    acc   = (tn + tp) / total
+    sens  = tp / (tp + fn) if (tp + fn) > 0 else None
+    spec  = tn / (tn + fp) if (tn + fp) > 0 else None
+    prec  = tp / (tp + fp) if (tp + fp) > 0 else None
+    f1    = (2 * prec * sens / (prec + sens)) if prec and sens and (prec + sens) > 0 else None
+else:
+    tn = fp = fn = tp = 0
+    acc = sens = spec = prec = f1 = None
+
+total = tn + fp + fn + tp
+
+
+# ── KPI summary ────────────────────────────────────────────────────────────────
+if mat is not None or df_bin_met is not None:
+    section_title("Resumen binario")
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1:
+        metric_card("Registros test", f"{total:,}", "total evaluados", accent="blue")
+    with c2:
+        metric_card("Accuracy",       f"{acc:.3f}"  if acc  is not None else "—",
+                    "global",                              accent="teal")
+    with c3:
+        metric_card("Sensibilidad",   f"{sens:.3f}" if sens is not None else "—",
+                    "recall Anormal",                      accent="warn")
+    with c4:
+        metric_card("Especificidad",  f"{spec:.3f}" if spec is not None else "—",
+                    "recall Normal",                       accent="info")
+    with c5:
+        _f1_accent = "err" if (f1 is not None and f1 < 0.60) else "teal"
+        metric_card("F1 Anormal",     f"{f1:.3f}"   if f1   is not None else "—",
+                    "clase positiva",                      accent=_f1_accent)
+
+    st.write("")
+
+
+# ── Heatmap ────────────────────────────────────────────────────────────────────
+section_title("Matriz de confusión 2×2")
+
+if mat is not None:
+    col_view, _ = st.columns([2.8, 7.2])
     with col_view:
         view = st.selectbox(
             "Vista",
-            ["Conteos absolutos", "Normalizado por fila (recall %)"],
+            ["Conteos absolutos", "Normalizado por fila (%)"],
             index=0,
             key="cm_view_select",
         )
 
-    display_matrix = matrix.copy()
-    fmt_str = ".0f"
-    if view == "Normalizado por fila (recall %)":
-        row_sums = matrix.sum(axis=1, keepdims=True)
+    disp_mat = mat.copy()
+    fmt_str  = ",.0f"
+    if view.startswith("Norm"):
+        row_sums = mat.sum(axis=1, keepdims=True)
         row_sums[row_sums == 0] = 1
-        display_matrix = matrix / row_sums
-        fmt_str = ".2%"
+        disp_mat = mat / row_sums
+        fmt_str  = ".1%"
 
-    text_matrix = [[f"{v:{fmt_str}}" for v in row] for row in display_matrix]
+    text_mat = [
+        [f"TN\n{disp_mat[0,0]:{fmt_str}}", f"FP\n{disp_mat[0,1]:{fmt_str}}"],
+        [f"FN\n{disp_mat[1,0]:{fmt_str}}", f"TP\n{disp_mat[1,1]:{fmt_str}}"],
+    ]
 
     fig = go.Figure(go.Heatmap(
-        z=display_matrix.tolist(),
-        x=labels,
-        y=labels,
-        text=text_matrix,
+        z=disp_mat.tolist(),
+        x=_LABELS,
+        y=_LABELS,
+        text=text_mat,
         texttemplate="%{text}",
-        textfont=dict(size=9, family="IBM Plex Mono, monospace"),
+        textfont=dict(size=13, family="IBM Plex Mono, monospace"),
         colorscale="Teal",
         colorbar=dict(title="", tickfont=dict(size=9, family="IBM Plex Mono, monospace")),
-        hovertemplate="Real: <b>%{y}</b><br>Predicho: <b>%{x}</b><br>Valor: %{z}<extra></extra>",
+        hovertemplate=(
+            "Real: <b>%{y}</b><br>"
+            "Predicho: <b>%{x}</b><br>"
+            "Valor: %{z}<extra></extra>"
+        ),
     ))
     fig.update_layout(
         plot_bgcolor="#121a2b",
         paper_bgcolor="rgba(0,0,0,0)",
-        font=dict(family="IBM Plex Mono, monospace", color="#8a98b5", size=10),
-        height=560,
+        font=dict(family="IBM Plex Mono, monospace", color="#8a98b5", size=11),
+        height=400,
         margin=dict(l=10, r=10, t=20, b=10),
-        xaxis=dict(title="Clase predicha", tickfont=dict(size=9), side="bottom"),
-        yaxis=dict(title="Clase real", tickfont=dict(size=9), autorange="reversed"),
+        xaxis=dict(title="Clase predicha", tickfont=dict(size=13), side="bottom"),
+        yaxis=dict(title="Clase real",     tickfont=dict(size=13), autorange="reversed"),
     )
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
+    col_hm, col_kv = st.columns([2.2, 1.8])
+    with col_hm:
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    with col_kv:
+        with st.container(border=True):
+            card_header("Valores absolutos", "test set completo")
+            kv_table([
+                (f'{badge("TN", "ok")} Real Normal · Pred Normal',     f"{tn:,}"),
+                (f'{badge("FP", "warn")} Real Normal · Pred Anormal',  f"{fp:,}"),
+                (f'{badge("FN", "err")} Real Anormal · Pred Normal',   f"{fn:,}"),
+                (f'{badge("TP", "teal")} Real Anormal · Pred Anormal', f"{tp:,}"),
+            ])
+        if cm_png:
+            with st.expander("Ver imagen PNG exportada", expanded=False):
+                st.image(str(cm_png), use_container_width=True)
 
-_cm_result = _build_matrix_from_csv(df_cm_csv)
-
-if _cm_result is not None:
-    _labels_all, _matrix = _cm_result
-    _render_heatmap(_labels_all, _matrix)
-    if has_png:
-        with st.expander("Ver imagen exportada (PNG)"):
-            st.image(str(cm_png_path), use_container_width=True)
-elif has_png:
+elif cm_png:
     callout(
         "info",
         "CSV no disponible — mostrando imagen exportada",
-        "Para habilitar el heatmap interactivo con normalización por fila, "
-        "exporta <code>reports/tables/tabular_confusion_matrix_absolute.csv</code> "
-        "desde el pipeline de evaluación.",
+        "Para el heatmap interactivo ejecuta el pipeline y genera "
+        "<code>reports/tables/confusion_matrix.csv</code>.",
     )
-    st.image(str(cm_png_path), use_container_width=True)
+    st.image(str(cm_png), use_container_width=True)
 else:
-    st.html(
-        '<div class="placeholder-block" style="min-height:180px;padding:32px">'
-        '<div class="ph-mono">datos no disponibles</div>'
-        '<div class="ph-title">Heatmap interactivo</div>'
-        '<div class="ph-desc">Ejecuta el pipeline de evaluación para generar '
-        '<code>reports/tables/tabular_confusion_matrix_absolute.csv</code>. '
-        'El heatmap se cargará automáticamente al estar disponible el archivo.</div>'
-        '</div>'
+    callout(
+        "warn",
+        "Datos no disponibles",
+        "No se encontró ningún archivo de matriz de confusión. "
+        "Ejecuta el pipeline para generar <code>reports/tables/confusion_matrix.csv</code>.",
     )
 
 st.write("")
 
-# ── Error table (only if CSV) ─────────────────────────────────────────────────
-section_title("Errores principales fuera de diagonal")
+# ── Métricas detalladas ────────────────────────────────────────────────────────
+if acc is not None:
+    section_title("Métricas derivadas")
 
-if has_csv and "real_label" in df_cm_csv.columns and "predicted_label" in df_cm_csv.columns:
-    df_errors = df_cm_csv[
-        df_cm_csv["real_label"] != df_cm_csv["predicted_label"]
-    ].copy()
-    if not df_errors.empty:
-        df_errors = df_errors.sort_values("count", ascending=False).head(15)
-        if has_cls and "support" in df_classes.columns:
-            def _pct(row):
-                cls = row["real_label"]
-                if cls in df_classes.index:
-                    sup = df_classes.loc[cls, "support"]
-                    if pd.notna(sup) and sup > 0:
-                        return f"{row['count'] / sup:.1%}"
-                return "—"
-            df_errors["% de la clase"] = df_errors.apply(_pct, axis=1)
+    col_m1, col_m2 = st.columns(2)
 
-        df_errors = df_errors.rename(columns={
-            "real_label":      "Clase real",
-            "predicted_label": "Clase predicha",
-            "count":           "Errores",
-        })
-        st.dataframe(df_errors, use_container_width=True, hide_index=True)
-    else:
-        st.info("No se encontraron errores fuera de diagonal en el CSV.")
-else:
-    st.html(
-        '<div class="placeholder-block" style="min-height:120px;padding:24px">'
-        '<div class="ph-mono">tabla pendiente</div>'
-        '<div class="ph-title">Top errores de confusión</div>'
-        '<div class="ph-desc">Disponible cuando se exporte <code>reports/tables/confusion_matrix.csv</code>.</div>'
-        '</div>'
-    )
-
-st.write("")
-
-# ── Per-class recall / interpretation ────────────────────────────────────────
-if has_cls:
-    section_title("Interpretación por clase — Recall")
-
-    st.write(
-        "El **recall** de una clase indica qué fracción de los ejemplos reales fueron "
-        "identificados correctamente. Recall bajo = el modelo frecuentemente predice "
-        "otra clase cuando el ritmo real era este."
-    )
-
-    col_chart, col_tbl = st.columns([1.4, 1])
-
-    with col_chart:
+    with col_m1:
         with st.container(border=True):
-            st.markdown("**Recall por clase** (ordenado ascendente)")
-            labels   = df_classes.index.tolist()
-            recall_v = df_classes["recall"].tolist() if "recall" in df_classes.columns else []
-            if recall_v:
-                st.plotly_chart(
-                    class_f1_bar(labels, recall_v, thresholds=(0.70, 0.30), height=340),
-                    use_container_width=True,
-                )
+            card_header("Desempeño global", "test set · clase positiva = Anormal")
+            kv_table([
+                ("Accuracy",                        f"{acc:.3f}  ({acc:.1%})"),
+                ("Sensibilidad / Recall Anormal",   f"{sens:.3f}  ({sens:.1%})" if sens is not None else "—"),
+                ("Especificidad / Recall Normal",   f"{spec:.3f}  ({spec:.1%})" if spec is not None else "—"),
+                ("Precision Anormal",               f"{prec:.3f}  ({prec:.1%})" if prec is not None else "—"),
+                ("F1 Anormal",                      f"{f1:.3f}"                 if f1   is not None else "—"),
+            ])
 
-    with col_tbl:
+    with col_m2:
         with st.container(border=True):
-            st.markdown("**Clases ordenadas por recall (peor primero)**")
-            if "recall" in df_classes.columns:
-                class_report_table(df_classes, sort_col="recall", ascending=True)
-            else:
-                st.caption("Columna recall no encontrada.")
+            card_header("Errores del modelo", "conteos del test set")
+            fp_rate = fp / (fp + tn) if (fp + tn) > 0 else None
+            fn_rate = fn / (fn + tp) if (fn + tp) > 0 else None
+            kv_table([
+                ("FP — falsas alarmas",
+                 f"{fp:,} &nbsp;({fp_rate:.1%} de los normales)" if fp_rate is not None else f"{fp:,}"),
+                ("FN — casos no detectados",
+                 f"{fn:,} &nbsp;({fn_rate:.1%} de los anormales)" if fn_rate is not None else f"{fn:,}"),
+                ("TN — normales correctos",  f"{tn:,}"),
+                ("TP — anormales detectados", f"{tp:,}"),
+            ])
 
     st.write("")
 
-    # ── Most confused (low recall) analysis ──────────────────────────────────
-    if "recall" in df_classes.columns:
-        df_hard = df_classes[df_classes["recall"] < 0.30].sort_values("recall")
-        if not df_hard.empty:
-            section_title("Clases con recall < 0.30 — alta tasa de confusión")
-            with st.container(border=True):
-                card_header(
-                    "Clases difíciles de detectar",
-                    f"{len(df_hard)} clases con recall < 0.30",
-                    right_html=badge(f"{len(df_hard)} clases", "err"),
-                )
-                rows_kv = []
-                for cls_name in df_hard.index:
-                    rec  = float(df_hard.loc[cls_name, "recall"])
-                    sup  = int(df_hard.loc[cls_name, "support"]) if "support" in df_hard.columns else 0
-                    prec = float(df_hard.loc[cls_name, "precision"]) if "precision" in df_hard.columns else 0.0
-                    rec_badge  = badge(f"recall {rec:.3f}", "err" if rec < 0.10 else "warn")
-                    prec_badge = badge(f"prec {prec:.3f}", "muted")
-                    sup_badge  = badge(f"{sup:,} ventanas", "muted")
-                    rows_kv.append((
-                        cls_name,
-                        f"{rec_badge} {prec_badge} {sup_badge}",
-                    ))
-                kv_table(rows_kv)
-
-                callout(
-                    "warn",
-                    "Por qué estas clases son difíciles",
-                    "Las clases con recall bajo son frecuentemente <b>predichas como la clase dominante</b> "
-                    "(N o AFIB/AFL). Causas probables: "
-                    "(1) muy pocas ventanas de entrenamiento, "
-                    "(2) features discriminativas insuficientes para este ritmo, "
-                    "(3) solapamiento en el espacio de features con clases más frecuentes. "
-                    "Posibles mejoras: SMOTE, pesos de clase, modelo 1D-CNN con "
-                    "representaciones aprendidas.",
-                )
-
-st.write("")
-
-# ── Technical recommendation ──────────────────────────────────────────────────
-section_title("Recomendación técnica")
+# ── Interpretación ─────────────────────────────────────────────────────────────
+section_title("Interpretación")
 
 with st.container(border=True):
-    card_header("Para habilitar el heatmap interactivo", "exportar CSV desde pipeline")
-    kv_table([
-        ("Archivo objetivo",  "reports/tables/confusion_matrix.csv"),
-        ("Formato esperado",  "real_label, predicted_label, count"),
-        ("Cómo generarlo",    "Desde el notebook de evaluación, después de predict() en test set"),
-        ("Código de ejemplo", ""),
-    ])
-    st.code(
-        "from sklearn.metrics import confusion_matrix\n"
-        "import itertools, pandas as pd\n\n"
-        "cm = confusion_matrix(y_true, y_pred, labels=class_names)\n"
-        "rows = [(r, c, cm[i, j])\n"
-        "        for (i, r), (j, c) in\n"
-        "        itertools.product(enumerate(class_names), repeat=2)]\n"
-        "pd.DataFrame(rows, columns=['real_label','predicted_label','count'])\\\n"
-        "  .to_csv('reports/tables/confusion_matrix.csv', index=False)",
-        language="python",
+    card_header("Lectura del resultado binario", "contexto académico")
+
+    _tn_tp  = tn + tp
+    _sens_s = f"{sens:.1%}" if sens is not None else "—"
+    _spec_s = f"{spec:.1%}" if spec is not None else "—"
+    _acc_s  = f"{acc:.1%}"  if acc  is not None else "—"
+
+    st.html(
+        f'<div style="font-size:13px;color:var(--fg-1);line-height:1.8;max-width:860px">'
+        f"<p>La <b>diagonal principal</b> (TN + TP = {_tn_tp:,}) representa los aciertos: "
+        f"{tn:,} registros normales y {tp:,} anormales clasificados correctamente. "
+        f"La <b>accuracy global</b> es {_acc_s}.</p>"
+        f"<p>Los <b>FN ({fn:,})</b> son registros anormales clasificados como normales — "
+        f"el error más crítico en contexto clínico porque corresponde a arritmias no detectadas. "
+        f"La <b>sensibilidad de {_sens_s}</b> significa que el modelo detecta aproximadamente "
+        f"ese porcentaje de las anormalidades reales.</p>"
+        f"<p>Los <b>FP ({fp:,})</b> son registros normales marcados como anormales (falsas alarmas). "
+        f"La <b>especificidad de {_spec_s}</b> indica que el modelo clasifica correctamente "
+        f"ese porcentaje de los registros normales.</p>"
+        f"<p>El modelo tiene <b>mejor especificidad que sensibilidad</b>: reconoce mejor "
+        f"lo normal que lo anormal. Para el objetivo de detección de arritmias, "
+        f"mejorar la sensibilidad sería el paso prioritario.</p>"
+        f"</div>"
     )
-    callout(
-        "info",
-        "Sin regresiones",
-        "Este cambio solo requiere agregar 5 líneas al notebook de evaluación y no "
-        "modifica ningún modelo entrenado ni los resultados existentes.",
-    )
+
+callout(
+    "warn",
+    "Demo académica — no para uso clínico",
+    "Resultados del test set del pipeline académico sobre VitalDB. "
+    "<b>No deben interpretarse como rendimiento clínico real.</b>",
+)
+
+page_footer()

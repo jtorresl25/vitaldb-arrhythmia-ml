@@ -4,7 +4,7 @@ import streamlit as st
 
 from components.badges import badge, badge_row
 from components.cards import callout, card_header, kv_table, metric_card, section_title
-from components.layout import page_header
+from components.layout import page_header, page_footer
 from utils.loaders import load_classification_report, load_model_metadata
 
 page_header(
@@ -249,3 +249,5 @@ with st.container(border=True):
             f'</div>',
             unsafe_allow_html=True,
         )
+
+page_footer()

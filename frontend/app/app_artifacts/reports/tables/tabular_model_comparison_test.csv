@@ -1,0 +1,2 @@
+model,status,test_f1_macro,test_precision_macro,test_recall_macro,test_accuracy,test_balanced_accuracy,test_f1_weighted,fit_seconds
+linear_svc,ok,0.6150368874278482,0.6146455445435355,0.6155260787618688,0.6325393077500716,0.6155260787618688,0.6332421243232982,1104.601

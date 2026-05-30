@@ -83,3 +83,5 @@ if req_path.exists():
 else:
     st.error("requirements.txt no encontrado desde la ruta resuelta.")
     st.write("Ruta buscada:", req_path)
+
+page_footer()

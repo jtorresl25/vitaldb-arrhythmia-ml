@@ -22,23 +22,8 @@ def inject_css() -> None:
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 
 def sidebar_branding() -> None:
-    """Render a minimal project identifier in the sidebar."""
-    st.sidebar.markdown(
-        '<div class="sb-brand">'
-        '<div class="sb-title">ECG Arrhythmia ML</div>'
-        '<div class="sb-sub">VitalDB · Clasificación de arritmias</div>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
-    st.sidebar.markdown(
-        '<div style="margin:4px 0 14px;padding:5px 10px;'
-        'background:rgba(251,191,36,0.07);border-left:2px solid rgba(251,191,36,0.4);'
-        'border-radius:0 4px 4px 0;font-size:10px;color:var(--fg-4);'
-        'font-family:var(--mono);letter-spacing:.05em">'
-        'Demo académica · no uso clínico'
-        '</div>',
-        unsafe_allow_html=True,
-    )
+    """No-op: sidebar header removed."""
+    pass
 
 
 # ── Page Header ──────────────────────────────────────────────────────────────
@@ -60,6 +45,21 @@ def page_header(
         f'<h2>{title}</h2>'
         f'{lead_p}'
         f'</div>'
+    )
+
+
+# ── Page Footer ─────────────────────────────────────────────────────────────
+
+def page_footer() -> None:
+    """Render a discrete author signature at the bottom of every page."""
+    st.markdown(
+        '<div style="margin-top:3rem;padding-top:1rem;'
+        'border-top:1px solid rgba(148,163,184,0.18);'
+        'color:rgba(148,163,184,0.60);font-size:0.78rem;'
+        'text-align:center;letter-spacing:0.02em;">'
+        'Diseñado por Juan Sebastián Torres'
+        '</div>',
+        unsafe_allow_html=True,
     )
 
 

@@ -1,7 +1,10 @@
-"""Página 07 — Probar ECG.
+"""Página 07 — Demo binaria normal/anormal.
 
-Evalúa casos VitalDB conocidos desde archivos .npy, mostrando preprocesamiento
-de señal ECG, predicciones del modelo tabular y comparación con etiquetas reales.
+Evalúa casos VitalDB con el modelo tabular binario (LinearSVC).
+Modo A: .npy disponible → ECG + evaluación completa.
+Modo B: sin .npy → evaluación tabular pre-computada o desde parquet local.
+
+Esta demo NO constituye diagnóstico clínico.
 """
 
 from __future__ import annotations
@@ -13,73 +16,32 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from utils.paths import PROJECT_ROOT, DATA_DIR
+from utils.paths import (
+    PROJECT_ROOT, DATA_DIR,
+    DEMO_CASES_CSV, ARTIFACTS_NPY_DIR,
+    resolve_npy_dir,
+)
 from components.badges import badge
 from components.cards import callout, card_header, kv_table, metric_card, section_title
-from components.layout import page_header
-from utils.loaders import load_model, load_model_metadata
+from components.layout import page_header, page_footer
+from utils.loaders import (
+    load_model,
+    load_model_metadata,
+    load_binary_case_level_metrics,
+)
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 # ---------------------------------------------------------------------------
-# Demo case catalogue (precomputed metadata)
+# Constants
 # ---------------------------------------------------------------------------
-_DEMO_CASES: list[dict] = [
-    {
-        "case_id":    12,
-        "tag":        "N + Ectopia ventricular",
-        "description":"Ritmo sinusal mayoritario con latidos ventriculares ectópicos. Modelo acierta ~89%.",
-        "classes":    ["N", "Patterned Ventricular Ectopy"],
-        "n_beats":    1106,
-        "accuracy":   0.889,
-        "accent":     "teal",
-        "icon":       "🫀",
-    },
-    {
-        "case_id":    1314,
-        "tag":        "N puro — modelo falla",
-        "description":"Solo ritmo sinusal, pero el modelo tiene baja accuracy (8%). Ilustra limitaciones con NSR.",
-        "classes":    ["N"],
-        "n_beats":    1935,
-        "accuracy":   0.084,
-        "accent":     "err",
-        "icon":       "⚠",
-    },
-    {
-        "case_id":    1738,
-        "tag":        "AFIB/AFL — detección perfecta",
-        "description":"Fibrilación/flutter auricular sostenido. El modelo detecta el 100% de los latidos.",
-        "classes":    ["AFIB/AFL"],
-        "n_beats":    4712,
-        "accuracy":   1.0,
-        "accent":     "ok",
-        "icon":       "✓",
-    },
-    {
-        "case_id":    3519,
-        "tag":        "Multi-arritmia: AFIB + VT + SVTA",
-        "description":"Cuatro tipos de ritmo incluyendo VT. Alta accuracy (97%) con clases difíciles.",
-        "classes":    ["AFIB/AFL", "SVTA", "VT", "Unclassifiable"],
-        "n_beats":    2391,
-        "accuracy":   0.971,
-        "accent":     "blue",
-        "icon":       "📊",
-    },
-    {
-        "case_id":    2852,
-        "tag":        "5 clases — caso muy difícil",
-        "description":"Cinco tipos de ritmo distintos. Accuracy del 3%: el caso más desafiante del set.",
-        "classes":    ["N", "Patterned Atrial Ectopy", "Patterned Ventricular Ectopy", "SND", "SVTA"],
-        "n_beats":    659,
-        "accuracy":   0.029,
-        "accent":     "warn",
-        "icon":       "⚡",
-    },
-]
+_PARQUET_PATH = DATA_DIR / "processed" / "filtered_tabular_modeling_dataset.parquet"
 
-_DEMO_FRAG_DIR = DATA_DIR / "demo" / "npy_cases"
-_FEAT_COLS: list[str] = [
+_LABEL_DISPLAY = {"normal": "Normal", "abnormal": "Anormal"}
+_BINARY_LABELS  = ("normal", "abnormal")
+
+_FEAT_COLS_FALLBACK: list[str] = [
     "time_second", "analyzed_duration_sec", "total_beats", "caseend", "anestart",
     "aneend", "opstart", "opend", "height", "weight", "bmi", "preop_plt", "preop_pt",
     "preop_k", "preop_alb", "preop_ast", "preop_alt", "preop_cr", "tubesize",
@@ -88,74 +50,427 @@ _FEAT_COLS: list[str] = [
 ]
 
 # ---------------------------------------------------------------------------
-# Header
+# Binary helpers
 # ---------------------------------------------------------------------------
-page_header(
-    "Probar ECG",
-    "Evalúa casos VitalDB conocidos o visualiza el preprocesamiento de señales ECG.",
-    badge_html=badge("Demo interactiva", "info"),
-)
+def _to_binary(labels) -> np.ndarray:
+    return np.array([
+        "normal" if str(lbl).strip() == "N" else "abnormal"
+        for lbl in np.asarray(labels).astype(str)
+    ])
+
+
+def _normalize_pred(pred) -> str:
+    s = str(pred).strip().lower()
+    return "normal" if s in ("normal", "0", "n", "false") else "abnormal"
+
+
+def _normalize_preds(preds: np.ndarray) -> np.ndarray:
+    return np.array([_normalize_pred(p) for p in preds])
+
+
+def _display(val: str) -> str:
+    return _LABEL_DISPLAY.get(str(val).lower().strip(), str(val).title())
+
+
+def _evaluate_binary(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
+    from sklearn.metrics import (
+        accuracy_score, precision_score, recall_score,
+        f1_score, confusion_matrix, balanced_accuracy_score,
+    )
+    mask = ~np.isin(y_true, ["nan", "None", "none", ""])
+    yt, yp = y_true[mask], y_pred[mask]
+    if len(yt) == 0:
+        return {}
+    has_both = len(set(yt)) == 2
+    kw = dict(pos_label="abnormal", zero_division=0)
+    return {
+        "n":           int(len(yt)),
+        "accuracy":    float(accuracy_score(yt, yp)),
+        "balanced":    float(balanced_accuracy_score(yt, yp)) if has_both else None,
+        "precision":   float(precision_score(yt, yp, **kw)),
+        "recall":      float(recall_score(yt, yp, **kw)),
+        "f1":          float(f1_score(yt, yp, **kw)),
+        "specificity": float(recall_score(yt, yp, pos_label="normal", zero_division=0)),
+        "cm":          confusion_matrix(yt, yp, labels=list(_BINARY_LABELS)) if has_both else None,
+    }
+
 
 # ---------------------------------------------------------------------------
-# Callout metodológico
+# Demo case catalogue
 # ---------------------------------------------------------------------------
+_DEMO_CASES_FALLBACK: list[dict] = [
+    {
+        "case_id": 5377, "title": "Normal estable", "binary_type": "normal",
+        "description": "Caso casi completamente normal. 1165/1169 registros normales. "
+                       "El modelo lo clasifica correctamente.",
+        "expected_pattern": "Mayoría normales", "n_beats": 1169,
+        "accuracy": 1.0, "recall_abnormal": 1.0, "notes": "",
+    },
+    {
+        "case_id": 2040, "title": "Anormal claro", "binary_type": "abnormal",
+        "description": "Caso 100% anormal detectado correctamente por el modelo.",
+        "expected_pattern": "Todos anormales", "n_beats": 1045,
+        "accuracy": 1.0, "recall_abnormal": 1.0, "notes": "",
+    },
+    {
+        "case_id": 337, "title": "Mixto representativo", "binary_type": "mixed",
+        "description": "Proporción balanceada entre normal y anormal. "
+                       "El modelo alcanza accuracy de 0.784.",
+        "expected_pattern": "Mezcla normal/anormal", "n_beats": 925,
+        "accuracy": 0.784, "recall_abnormal": 0.811, "notes": "",
+    },
+    {
+        "case_id": 3098, "title": "Caso difícil", "binary_type": "difficult",
+        "description": "Incluido para mostrar limitaciones. "
+                       "Accuracy de 0.647 y bajo recall para Anormal.",
+        "expected_pattern": "Mezcla normal/anormal", "n_beats": 750,
+        "accuracy": 0.647, "recall_abnormal": 0.0, "notes": "",
+    },
+]
+
+_BINARY_TYPE_META = {
+    "normal":    {"icon": "✓",  "accent": "teal", "label": "Normal"},
+    "abnormal":  {"icon": "⚠",  "accent": "err",  "label": "Anormal"},
+    "mixed":     {"icon": "📊", "accent": "blue",  "label": "Mixto"},
+    "difficult": {"icon": "⚡", "accent": "warn",  "label": "Difícil"},
+}
+
+
+def _load_demo_cases() -> list[dict]:
+    if DEMO_CASES_CSV.exists():
+        try:
+            df = pd.read_csv(DEMO_CASES_CSV)
+            if "n_beats" in df.columns:
+                df["n_beats"] = pd.to_numeric(df["n_beats"], errors="coerce")
+            return df.to_dict(orient="records")
+        except Exception:
+            pass
+    return _DEMO_CASES_FALLBACK
+
+
+_DEMO_CASES    = _load_demo_cases()
+_DEMO_FRAG_DIR = resolve_npy_dir()
+
+
+# ---------------------------------------------------------------------------
+# Mode B — tabular evaluation without ECG signal
+# ---------------------------------------------------------------------------
+def _render_mode_b(case_id: int) -> None:
+    dc    = next((d for d in _DEMO_CASES if int(d["case_id"]) == case_id), {})
+    btype = str(dc.get("binary_type", "mixed")).lower()
+    tmeta = _BINARY_TYPE_META.get(btype, _BINARY_TYPE_META["mixed"])
+
+    # Callout: no ECG
+    callout(
+        "info",
+        "Señal ECG no disponible para este caso",
+        "El archivo <code>.npy</code> no está incluido en los artefactos de despliegue. "
+        "Se muestra la <b>evaluación tabular</b> del modelo usando las features procesadas "
+        "(RR intervals + metadatos clínicos). "
+        "Los resultados son idénticos a los obtenidos en la evaluación oficial.",
+    )
+
+    st.markdown("<div style='margin-top:16px'></div>", unsafe_allow_html=True)
+
+    # Get full per-case metrics from binary_case_level_metrics.csv
+    df_all  = load_binary_case_level_metrics()
+    cm_row: pd.Series | None = None
+    if df_all is not None and "case_id" in df_all.columns:
+        sub    = df_all[df_all["case_id"] == case_id]
+        cm_row = sub.iloc[0] if not sub.empty else None
+
+    def _m(col: str, default=None):
+        if cm_row is not None and col in cm_row.index:
+            v = cm_row[col]
+            return None if (isinstance(v, float) and np.isnan(v)) else v
+        return dc.get(col, default)
+
+    n_total    = int(_m("n_records",   dc.get("n_beats") or 0))
+    n_normal   = int(_m("n_normal",    0))
+    n_abnormal = int(_m("n_abnormal",  0))
+    pct_n      = float(_m("pct_normal",   n_normal  / max(n_total, 1)))
+    pct_ab     = float(_m("pct_abnormal", n_abnormal / max(n_total, 1)))
+
+    acc     = _m("accuracy")
+    bal     = _m("balanced_accuracy")
+    prec_ab = _m("precision_abnormal")
+    rec_ab  = _m("recall_abnormal")
+    f1_ab   = _m("f1_abnormal")
+    spec_n  = _m("specificity_normal")
+
+    # Case header card
+    with st.container(border=True):
+        card_header(
+            dc.get("title", f"case_{case_id}"),
+            f"case_id = {case_id} · {tmeta['label']}",
+            right_html=badge(tmeta["label"], tmeta["accent"]),
+        )
+        st.markdown(
+            f'<p style="font-size:13px;color:var(--fg-1);margin:6px 0 0">'
+            f'{dc.get("description","")}</p>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("<div style='margin-top:20px'></div>", unsafe_allow_html=True)
+
+    # Distribution
+    section_title("Distribución real del caso")
+
+    col_d1, col_d2, col_d3, col_d4 = st.columns(4)
+    with col_d1:
+        metric_card("Total registros", f"{n_total:,}", accent="blue")
+    with col_d2:
+        metric_card("Normal",  f"{n_normal:,}",   helper=f"{pct_n:.1%}",  accent="teal")
+    with col_d3:
+        metric_card("Anormal", f"{n_abnormal:,}", helper=f"{pct_ab:.1%}", accent="err")
+    with col_d4:
+        metric_card("Clase dominante",
+                    "Normal" if n_normal >= n_abnormal else "Anormal",
+                    accent="blue")
+
+    if n_total > 0:
+        import plotly.graph_objects as go
+        fig_bar = go.Figure()
+        fig_bar.add_bar(
+            x=["Normal", "Anormal"],
+            y=[n_normal, n_abnormal],
+            marker_color=["#2dd4bf", "#f87171"],
+            text=[f"{n_normal:,} ({pct_n:.1%})", f"{n_abnormal:,} ({pct_ab:.1%})"],
+            textposition="outside",
+        )
+        fig_bar.update_layout(
+            height=220, margin=dict(l=0, r=0, t=10, b=0),
+            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+            font_color="#c5cfe0", showlegend=False,
+            yaxis=dict(showgrid=False, visible=False),
+            xaxis=dict(showgrid=False),
+        )
+        st.plotly_chart(fig_bar, use_container_width=True, config={"displayModeBar": False})
+
+    # Metrics
+    st.markdown("<div style='margin-top:8px'></div>", unsafe_allow_html=True)
+    section_title("Métricas del modelo en este caso")
+
+    def _fmt(v) -> str:
+        return "—" if v is None else f"{float(v):.1%}"
+
+    m1, m2, m3, m4, m5, m6 = st.columns(6)
+    with m1:
+        metric_card("Accuracy",           _fmt(acc),     accent="teal")
+    with m2:
+        metric_card("Balanced acc.",      _fmt(bal),     accent="teal")
+    with m3:
+        metric_card("Recall Anormal",     _fmt(rec_ab),  accent="err")
+    with m4:
+        metric_card("Precision Anormal",  _fmt(prec_ab), accent="err")
+    with m5:
+        metric_card("F1 Anormal",         _fmt(f1_ab),   accent="warn")
+    with m6:
+        metric_card("Specificity Normal", _fmt(spec_n),  accent="blue")
+
+    with st.container(border=True):
+        card_header("Detalle de la evaluación", f"case_id = {case_id}")
+        kv_rows = [
+            ("Caso",              f"case_id = {case_id}"),
+            ("Tipo",              tmeta["label"]),
+            ("Total registros",   f"{n_total:,}"),
+            ("Normal",            f"{n_normal:,} ({pct_n:.1%})"),
+            ("Anormal",           f"{n_abnormal:,} ({pct_ab:.1%})"),
+        ]
+        if acc  is not None: kv_rows.append(("Accuracy",
+                                              f'<b style="color:var(--teal)">{float(acc):.3f}</b>'))
+        if bal  is not None: kv_rows.append(("Balanced accuracy",  f"{float(bal):.3f}"))
+        if rec_ab  is not None: kv_rows.append(("Recall Anormal",   f"{float(rec_ab):.3f}"))
+        if prec_ab is not None: kv_rows.append(("Precision Anormal",f"{float(prec_ab):.3f}"))
+        if f1_ab   is not None: kv_rows.append(("F1 Anormal",       f"{float(f1_ab):.3f}"))
+        if spec_n  is not None: kv_rows.append(("Specificity Normal",f"{float(spec_n):.3f}"))
+        kv_table(kv_rows)
+
+    # Live prediction from parquet (local only)
+    st.markdown("<div style='margin-top:20px'></div>", unsafe_allow_html=True)
+    section_title("Predicciones individuales")
+
+    if not _PARQUET_PATH.exists():
+        callout(
+            "info",
+            "Dataset tabular no disponible en este entorno",
+            "El parquet no está incluido en los artefactos de despliegue (~600 MB). "
+            "Las métricas del resumen provienen de la evaluación ejecutada localmente.",
+        )
+        return
+
+    _model_p = load_model()
+    _meta_md = load_model_metadata()
+    if _model_p is None:
+        callout("warn", "Modelo no disponible",
+                "No se encontró <code>tabular_best_model_pipeline.joblib</code>.")
+        return
+
+    feat_cols = (
+        (_meta_md.get("numeric_features", []) + _meta_md.get("categorical_features", []))
+        if _meta_md else _FEAT_COLS_FALLBACK
+    )
+
+    with st.spinner(f"Cargando registros de case_id={case_id}…"):
+        try:
+            df_case = pd.read_parquet(
+                _PARQUET_PATH,
+                filters=[("case_id", "=", case_id)],
+            )
+        except Exception as e:
+            callout("err", "Error al leer el parquet", str(e))
+            return
+
+    if df_case.empty:
+        callout("warn", "Caso no encontrado",
+                f"case_id={case_id} no tiene filas en el dataset tabular.")
+        return
+
+    y_true_live = _to_binary(df_case["rhythm_label"].values) \
+        if "rhythm_label" in df_case.columns else None
+    try:
+        X_live   = df_case[[c for c in feat_cols if c in df_case.columns]]
+        y_pred_live = _normalize_preds(_model_p.predict(X_live))
+    except Exception as e:
+        callout("err", "Error en predicción", str(e))
+        return
+
+    show_cols = [c for c in ["time_second", "rhythm_label", "beat_type"] if c in df_case.columns]
+    res_df = df_case[show_cols].copy().reset_index(drop=True)
+    res_df["Real"]      = [_display(v) for v in (y_true_live if y_true_live is not None else ["—"] * len(y_pred_live))]
+    res_df["Predicción"] = [_display(v) for v in y_pred_live]
+    if y_true_live is not None:
+        _correct_mask = pd.Series(
+            np.asarray(y_true_live).astype(str) == np.asarray(y_pred_live).astype(str),
+            index=res_df.index,
+        )
+        res_df["✓/✗"] = _correct_mask.map({True: "✓", False: "✗"})
+    if "time_second" in res_df.columns:
+        res_df["time_second"] = res_df["time_second"].round(3)
+
+    col_filt, _ = st.columns([2, 6])
+    with col_filt:
+        _show_errors = st.checkbox("Mostrar solo errores", value=False, key="b_mode_errors")
+
+    res_display = (
+        res_df[res_df["✓/✗"] == "✗"] if _show_errors and "✓/✗" in res_df.columns
+        else res_df
+    )
+
+    with st.container(border=True):
+        card_header(
+            "Real vs Predicción",
+            f"{len(res_display):,} / {len(res_df):,} filas · Normal / Anormal",
+        )
+        col_cfg: dict = {
+            "time_second": st.column_config.NumberColumn("time (s)", format="%.3f", width="small"),
+            "rhythm_label": st.column_config.TextColumn("rhythm_label (original)", width="medium"),
+        }
+        st.dataframe(
+            res_display.head(400),
+            use_container_width=True,
+            hide_index=True,
+            column_config=col_cfg,
+        )
+        st.caption(
+            "rhythm_label es contexto — la evaluación binaria es "
+            "Normal (N) vs Anormal (≠ N). "
+            f"Mostrando {min(len(res_display), 400):,} de {len(res_display):,} filas."
+        )
+
+    if y_true_live is not None and "✓/✗" in res_df.columns:
+        n_err = (res_df["✓/✗"] == "✗").sum()
+        if n_err > 0:
+            with st.expander(f"Errores de clasificación ({n_err:,})", expanded=False):
+                err_grp = (
+                    res_df[res_df["✓/✗"] == "✗"]
+                    .groupby(["Real", "Predicción"])
+                    .size()
+                    .reset_index(name="count")
+                    .sort_values("count", ascending=False)
+                )
+                st.dataframe(err_grp, hide_index=True, use_container_width=True)
+
+
+# ---------------------------------------------------------------------------
+# Page header & callout
+# ---------------------------------------------------------------------------
+page_header(
+    "Clasificación binaria: Normal / Anormal",
+    "Demo con el modelo LinearSVC — detección de ritmos intraoperatorios.",
+    badge_html=badge("Demo binaria", "info"),
+)
+
 callout(
     "info",
-    "Cómo funciona esta demo",
-    "El modelo trabaja con <b>features tabulares</b> (RR intervals + metadatos clínicos). "
-    "Para casos VitalDB conocidos (<code>case_XXXX.npy</code>), la app asocia el archivo con sus "
-    "anotaciones reales y calcula predicciones comparables. "
-    "Para archivos externos sin anotaciones ni metadata, solo es posible "
-    "visualizar la señal y su preprocesamiento — no se calcula predicción ni evaluación. "
-    "<br><span style='color:var(--fg-3)'>La señal ECG no alimenta el modelo directamente: "
-    "se usa únicamente para visualización.</span>",
+    "Modelo binario — Normal vs Anormal",
+    "El modelo clasifica cada latido como <b>Normal</b> (rhythm_label = N) o "
+    "<b>Anormal</b> (cualquier otra etiqueta). "
+    "Usa <b>features tabulares</b>: RR intervals + metadata clínica. "
+    "La señal ECG se muestra cuando está disponible — no alimenta el modelo directamente. "
+    "<br><span style='color:var(--fg-3)'>Demo académica — no constituye diagnóstico clínico.</span>",
 )
 
 st.write("")
 
 # ---------------------------------------------------------------------------
-# Section 1: Demo cases grid
+# Section 1: Demo case grid
 # ---------------------------------------------------------------------------
 section_title("Casos VitalDB demo")
 
 st.html(
     '<p style="font-size:12px;color:var(--fg-3);margin:0 0 12px">'
-    'Haz clic en un caso para cargarlo automáticamente.'
+    'Casos seleccionados para ilustrar distintos patrones binarios. '
+    'Haz clic en un caso para cargarlo.'
     '</p>'
 )
 
-_cols = st.columns(5)
+_cols = st.columns(len(_DEMO_CASES))
 for _i, _dc in enumerate(_DEMO_CASES):
     with _cols[_i]:
-        _is_active = st.session_state.get("_p7_active_case") == _dc["case_id"]
-        _acc_color = (
-            "var(--ok)"   if _dc["accuracy"] >= 0.80 else
-            "var(--teal)" if _dc["accuracy"] >= 0.50 else
-            "var(--warn)"  if _dc["accuracy"] >= 0.20 else
-            "var(--err)"
+        _cid   = int(_dc["case_id"])
+        _btype = str(_dc.get("binary_type", "mixed")).lower()
+        _tmeta = _BINARY_TYPE_META.get(_btype, _BINARY_TYPE_META["mixed"])
+        _is_active = st.session_state.get("_p7_active_case") == _cid
+
+        _npy_avail  = (_DEMO_FRAG_DIR / f"case_{_cid}.npy").exists()
+        _npy_badge  = (
+            '<span style="font-size:9px;color:var(--teal)">● señal ECG disponible</span>'
+            if _npy_avail
+            else '<span style="font-size:9px;color:var(--fg-3)">○ evaluación tabular</span>'
         )
+        _n_beats    = _dc.get("n_beats")
+        try:
+            _beats_str = f"{int(float(_n_beats)):,} registros" if _n_beats else "registros: —"
+        except (TypeError, ValueError):
+            _beats_str = "registros: —"
+
         _border = "2px solid var(--teal)" if _is_active else "1px solid var(--line-1)"
+        _title  = str(_dc.get("title", f"case_{_cid}"))
+        _desc   = str(_dc.get("description", ""))
+
         st.html(
             f'<div style="border:{_border};border-radius:8px;padding:10px 10px 8px;'
-            f'background:var(--bg-1);min-height:130px">'
-            f'<div style="font-size:18px;margin-bottom:4px">{_dc["icon"]}</div>'
+            f'background:var(--bg-1);min-height:148px">'
+            f'<div style="font-size:18px;margin-bottom:4px">{_tmeta["icon"]}</div>'
+            f'<div style="font-size:10px;font-weight:700;color:var(--{_tmeta["accent"]});'
+            f'letter-spacing:.04em;margin-bottom:3px;text-transform:uppercase">{_tmeta["label"]}</div>'
             f'<div style="font-size:11px;font-weight:600;color:var(--fg-0);'
-            f'line-height:1.3;margin-bottom:6px">{_dc["tag"]}</div>'
+            f'line-height:1.3;margin-bottom:5px">{_title}</div>'
             f'<div style="font-size:10px;color:var(--fg-3);margin-bottom:6px;line-height:1.4">'
-            f'{_dc["description"][:60]}…</div>'
+            f'{_desc[:70]}{"…" if len(_desc) > 70 else ""}</div>'
             f'<div style="font-size:10px;font-family:var(--mono);color:var(--fg-3)">'
-            f'case_id {_dc["case_id"]} · {_dc["n_beats"]:,} latidos</div>'
-            f'<div style="font-size:11px;font-weight:600;color:{_acc_color};'
-            f'font-family:var(--mono);margin-top:4px">acc {_dc["accuracy"]:.0%}</div>'
+            f'case_id {_cid} · {_beats_str}</div>'
+            f'<div style="margin-top:5px">{_npy_badge}</div>'
             f'</div>'
         )
-        if st.button(f"Cargar", key=f"load_case_{_dc['case_id']}", use_container_width=True):
-            st.session_state["_p7_active_case"]   = _dc["case_id"]
-            st.session_state["_p7_signal"]         = None
-            st.session_state["_p7_proc_signal"]    = None
-            st.session_state["_p7_feat_df"]        = None
-            st.session_state["_p7_predictions"]    = None
-            st.session_state["_p7_source"]         = "demo"
+        if st.button("Cargar", key=f"load_case_{_cid}", use_container_width=True):
+            st.session_state["_p7_active_case"] = _cid
+            st.session_state["_p7_signal"]       = None
+            st.session_state["_p7_proc_signal"]  = None
+            st.session_state["_p7_feat_df"]      = None
+            st.session_state["_p7_predictions"]  = None
+            st.session_state["_p7_source"]       = "demo"
             st.rerun()
 
 st.write("")
@@ -163,32 +478,60 @@ st.write("")
 # ---------------------------------------------------------------------------
 # Section 2: Download demo fragment
 # ---------------------------------------------------------------------------
-section_title("Descargar caso demo")
+section_title("Descargar fragmento demo")
 
-_active_cid = st.session_state.get("_p7_active_case", 12)
-_dc_info = next((d for d in _DEMO_CASES if d["case_id"] == _active_cid), _DEMO_CASES[0])
-_frag_path = _DEMO_FRAG_DIR / f"case_{_active_cid}.npy"
+# case_337 is the primary recommended downloadable case (mixto representativo)
+_PRIMARY_CASE_ID = 337
+_active_cid = st.session_state.get("_p7_active_case", _PRIMARY_CASE_ID)
+_dc_info    = next((d for d in _DEMO_CASES if int(d["case_id"]) == _active_cid), _DEMO_CASES[0])
+_frag_path  = _DEMO_FRAG_DIR / f"case_{_active_cid}.npy"
+_primary_frag_path = _DEMO_FRAG_DIR / f"case_{_PRIMARY_CASE_ID}.npy"
 
-col_dl_a, col_dl_b, _ = st.columns([2, 2, 4])
-with col_dl_a:
-    if _frag_path.exists():
-        _frag_bytes = _frag_path.read_bytes()
+# Always show the primary recommended download (case_337) even when another case is active
+col_dl_rec, col_dl_active, _ = st.columns([2.2, 2, 3.8])
+
+with col_dl_rec:
+    if _primary_frag_path.exists():
         st.download_button(
-            label=f"⬇ Descargar case_{_active_cid}.npy (demo, 60 s)",
-            data=_frag_bytes,
+            label="⬇ Descargar case_337.npy (recomendado)",
+            data=_primary_frag_path.read_bytes(),
+            file_name="case_337.npy",
+            mime="application/octet-stream",
+            use_container_width=True,
+            help="Caso mixto representativo: 54% Normal / 46% Anormal. "
+                 "Sube este archivo para ver cómo el modelo alterna predicciones.",
+        )
+        st.caption(
+            "**Caso mixto representativo** · case_id 337 · tipo: Mixto\n\n"
+            "Caso con proporción balanceada entre registros normales y anormales. "
+            "Permite visualizar cómo el modelo alterna entre predicciones Normal y Anormal "
+            "dentro de una misma señal ECG. Recomendado para probar el flujo completo."
+        )
+    else:
+        st.caption(
+            "La señal cruda .npy del caso 337 aún no está incluida en los artefactos "
+            "de despliegue. La evaluación tabular sigue disponible al hacer clic en «Cargar»."
+        )
+
+with col_dl_active:
+    if _active_cid != _PRIMARY_CASE_ID and _frag_path.exists():
+        st.download_button(
+            label=f"⬇ Descargar case_{_active_cid}.npy",
+            data=_frag_path.read_bytes(),
             file_name=f"case_{_active_cid}.npy",
             mime="application/octet-stream",
             use_container_width=True,
-            help="Fragmento de 60 s del segmento válido de la señal. "
-                 "Súbelo en la sección siguiente para ver el flujo completo.",
         )
-    else:
-        st.caption("Fragmento demo no disponible.")
-with col_dl_b:
-    st.caption(
-        f"**{_dc_info['tag']}** · {_dc_info['n_beats']:,} latidos · "
-        f"acc {_dc_info['accuracy']:.0%}"
-    )
+        _btype_label = _BINARY_TYPE_META.get(
+            str(_dc_info.get("binary_type", "mixed")).lower(), _BINARY_TYPE_META["mixed"]
+        )["label"]
+        st.caption(
+            f"**{_dc_info.get('title', f'case_{_active_cid}')}** · "
+            f"tipo: {_btype_label} · "
+            f"{_dc_info.get('expected_pattern', '')}"
+        )
+    elif _active_cid != _PRIMARY_CASE_ID:
+        st.caption(f"Señal ECG (.npy) no disponible para case_{_active_cid}.")
 
 st.write("")
 
@@ -199,8 +542,8 @@ section_title("Subir archivo ECG (.npy)")
 
 st.html(
     '<p style="font-size:12px;color:var(--fg-3);margin:0 0 10px">'
-    'Acepta cualquier archivo .npy 1D con señal ECG a 500 Hz. '
-    'Para evaluación completa, usa un archivo con nombre <code>case_XXXX.npy</code>.'
+    'Acepta archivos .npy 1D con señal ECG a 500 Hz. '
+    'Para evaluación completa, usa un archivo llamado <code>case_XXXX.npy</code>.'
     '</p>'
 )
 _uploaded = st.file_uploader(
@@ -211,7 +554,6 @@ _uploaded = st.file_uploader(
 )
 
 if _uploaded is not None:
-    # New upload overrides demo selection
     _upload_cid_detected = None
     try:
         from utils.case_eval import extract_case_id_from_filename
@@ -219,67 +561,52 @@ if _uploaded is not None:
     except Exception:
         pass
     if st.session_state.get("_p7_last_upload") != _uploaded.name:
-        st.session_state["_p7_last_upload"]   = _uploaded.name
-        st.session_state["_p7_active_case"]   = _upload_cid_detected
-        st.session_state["_p7_signal"]        = None
-        st.session_state["_p7_proc_signal"]   = None
-        st.session_state["_p7_feat_df"]       = None
-        st.session_state["_p7_predictions"]   = None
-        st.session_state["_p7_source"]        = "upload"
-        st.session_state["_p7_upload_file"]   = _uploaded
+        st.session_state["_p7_last_upload"] = _uploaded.name
+        st.session_state["_p7_active_case"] = _upload_cid_detected
+        st.session_state["_p7_signal"]      = None
+        st.session_state["_p7_proc_signal"] = None
+        st.session_state["_p7_feat_df"]     = None
+        st.session_state["_p7_predictions"] = None
+        st.session_state["_p7_source"]      = "upload"
+        st.session_state["_p7_upload_file"] = _uploaded
         st.rerun()
 
 # ---------------------------------------------------------------------------
-# Resolve active case & signal
+# Resolve active case and npy availability
 # ---------------------------------------------------------------------------
+_active_cid = st.session_state.get("_p7_active_case")
+_source     = st.session_state.get("_p7_source", "demo")
+_upload_obj = st.session_state.get("_p7_upload_file") if _source == "upload" else None
+
+_frag_p    = _DEMO_FRAG_DIR / f"case_{_active_cid}.npy" if _active_cid else None
+_npy_exists = bool(
+    (_frag_p is not None and _frag_p.exists())
+    or (_source == "upload" and _upload_obj is not None)
+)
+
+# Try importing ECG signal modules (only needed for Mode A — don't stop on failure)
 try:
     from utils.case_eval import (
         find_annotation_file, load_case_annotations, load_case_metadata,
         get_case_features_from_parquet, build_tabular_features_from_case,
         load_npy_signal, summarize_npy_signal, find_valid_segments,
-        predict_case_windows, evaluate_case_predictions, TARGET_FS, WAVEFORMS_DIR,
+        predict_case_windows, TARGET_FS, WAVEFORMS_DIR,
     )
     from components.ecg_viewer import (
         plot_ecg_signal, plot_raw_vs_processed,
         plot_annotations_on_ecg, plot_ecg_with_prediction_regions,
     )
     _EVAL_MODULES_OK = True
-except ImportError as _import_err:
+    # Also check full waveform path if modules loaded
+    if _active_cid and not _npy_exists:
+        _npy_exists = (WAVEFORMS_DIR / f"case_{_active_cid}.npy").exists()
+except ImportError:
     _EVAL_MODULES_OK = False
-    callout(
-        "err",
-        "Módulos de evaluación no disponibles",
-        f"Falta una dependencia requerida: <code>{_import_err}</code>. "
-        "Verifica que <code>requirements.txt</code> incluya plotly, numpy y pandas.",
-    )
-    st.stop()
 
-_active_cid = st.session_state.get("_p7_active_case")
-_source     = st.session_state.get("_p7_source", "demo")
-
-# Load signal if not yet loaded
-if _active_cid is not None and st.session_state.get("_p7_signal") is None:
-    _sig_path = None
-    if _source == "demo":
-        # Use full waveform if available, else fragment
-        _full_path = WAVEFORMS_DIR / f"case_{_active_cid}.npy"
-        _frag_p    = _DEMO_FRAG_DIR / f"case_{_active_cid}.npy"
-        _sig_path  = _full_path if _full_path.exists() else _frag_p
-    elif _source == "upload":
-        _upload_obj = st.session_state.get("_p7_upload_file")
-        if _upload_obj is not None:
-            _upload_obj.seek(0)
-            _sig_path = _upload_obj
-
-    if _sig_path is not None:
-        try:
-            st.session_state["_p7_signal"] = load_npy_signal(_sig_path)
-        except Exception as _load_err:
-            callout("err", "Error al cargar el archivo .npy", str(_load_err))
-
-_signal = st.session_state.get("_p7_signal")
-
-if _signal is None and _active_cid is None:
+# ---------------------------------------------------------------------------
+# No case selected → placeholder
+# ---------------------------------------------------------------------------
+if _active_cid is None:
     st.html(
         '<div class="placeholder-block" style="min-height:120px;padding:24px">'
         '<div class="ph-mono">sin caso activo</div>'
@@ -288,20 +615,70 @@ if _signal is None and _active_cid is None:
     )
     st.stop()
 
-if _signal is None:
-    st.warning("No se pudo cargar la señal. Verifica el archivo o selecciona un caso demo.")
+# ---------------------------------------------------------------------------
+# Mode B — no .npy: tabular evaluation
+# ---------------------------------------------------------------------------
+if not _npy_exists:
+    st.html('<hr style="border-color:var(--line-1);margin:4px 0 20px">')
+    st.html(
+        f'<div style="display:inline-flex;align-items:center;gap:10px;padding:6px 14px;'
+        f'background:rgba(74,140,255,0.08);border:1px solid rgba(74,140,255,0.3);'
+        f'border-radius:6px;margin-bottom:14px">'
+        f'<span style="color:#4a8cff;font-weight:600;font-size:13px">📊 Evaluación tabular</span>'
+        f'<span style="color:#8a98b5;font-size:11px;font-family:var(--mono)">'
+        f'case_id = {_active_cid}</span>'
+        f'<span style="color:#8a98b5;font-size:11px">· señal ECG no disponible</span>'
+        f'</div>'
+    )
+    _render_mode_b(_active_cid)
+    callout(
+        "warn",
+        "Demo académica — no para uso clínico",
+        "Resultados sobre un caso individual. "
+        "Métricas oficiales del modelo: test_f1_macro=0.615, accuracy=0.633 "
+        "(conjunto de test completo).",
+    )
     st.stop()
 
 # ---------------------------------------------------------------------------
-# Determine Caso A vs Caso B
+# Mode A — .npy available
 # ---------------------------------------------------------------------------
-_ann_path = find_annotation_file(_active_cid) if _active_cid else None
+if not _EVAL_MODULES_OK:
+    callout(
+        "err",
+        "Módulos de señal no disponibles",
+        "No se pueden cargar los módulos de procesamiento ECG. "
+        "Verifica las dependencias en <code>requirements.txt</code>.",
+    )
+    st.stop()
+
+if st.session_state.get("_p7_signal") is None:
+    _sig_path = None
+    if _source == "demo":
+        _full_path = WAVEFORMS_DIR / f"case_{_active_cid}.npy"
+        _sig_path  = _full_path if _full_path.exists() else (_frag_p if _frag_p and _frag_p.exists() else None)
+    elif _source == "upload" and _upload_obj is not None:
+        _upload_obj.seek(0)
+        _sig_path = _upload_obj
+
+    if _sig_path is not None:
+        try:
+            st.session_state["_p7_signal"] = load_npy_signal(_sig_path)
+        except Exception as _load_err:
+            callout("err", "Error al cargar el archivo .npy", str(_load_err))
+
+_signal = st.session_state.get("_p7_signal")
+if _signal is None:
+    st.warning("No se pudo cargar la señal. Verifica el archivo o selecciona otro caso.")
+    st.stop()
+
+# Determine Case A (with annotations) vs ECG-only
+_ann_path  = find_annotation_file(_active_cid) if _active_cid else None
 _is_case_a = (_active_cid is not None) and (_ann_path is not None)
 
 st.write("")
 st.html('<hr style="border-color:var(--line-1);margin:4px 0 20px">')
 
-# Case badge
 if _is_case_a:
     st.html(
         f'<div style="display:inline-flex;align-items:center;gap:10px;padding:6px 14px;'
@@ -309,6 +686,7 @@ if _is_case_a:
         f'border-radius:6px;margin-bottom:14px">'
         f'<span style="color:#2dd4bf;font-weight:600;font-size:13px">✓ Caso VitalDB reconocido</span>'
         f'<span style="color:#8a98b5;font-size:11px;font-family:var(--mono)">case_id = {_active_cid}</span>'
+        f'<span style="color:#8a98b5;font-size:11px">· evaluación binaria disponible</span>'
         f'</div>'
     )
 else:
@@ -317,7 +695,7 @@ else:
         'background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.3);'
         'border-radius:6px;margin-bottom:14px">'
         '<span style="color:#fbbf24;font-weight:600;font-size:13px">⚠ Archivo sin anotaciones</span>'
-        '<span style="color:#8a98b5;font-size:11px">predicción tabular no disponible</span>'
+        '<span style="color:#8a98b5;font-size:11px">solo visualización ECG disponible</span>'
         '</div>'
     )
 
@@ -330,13 +708,13 @@ _summary = summarize_npy_signal(_signal, fs=TARGET_FS)
 _segs    = find_valid_segments(_signal, fs=TARGET_FS, min_duration_s=5.0, max_segments=5)
 
 c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("Muestras", f"{_summary['n_samples']:,}")
-c2.metric("Duración (s)", f"{_summary['duration_s']:,.0f}")
-c3.metric("fs asumida", f"{int(TARGET_FS)} Hz")
-c4.metric("NaN", f"{_summary['nan_pct']:.1f}%")
+c1.metric("Muestras",          f"{_summary['n_samples']:,}")
+c2.metric("Duración (s)",      f"{_summary['duration_s']:,.0f}")
+c3.metric("fs asumida",        f"{int(TARGET_FS)} Hz")
+c4.metric("NaN",               f"{_summary['nan_pct']:.1f}%")
 c5.metric("Segmentos válidos", str(len(_segs)))
 
-# Choose best display segment
+_segs and (_seg_start := _segs[0][0]) and (_seg_end := _segs[0][1])
 if _segs:
     _seg_start, _seg_end = _segs[0]
     _disp_offset = _seg_start / TARGET_FS
@@ -349,17 +727,15 @@ else:
 # Section 5: ECG crudo
 # ---------------------------------------------------------------------------
 section_title("Señal ECG cruda")
-
+st.caption("Visualización del archivo .npy. Esta señal **no alimenta el modelo**.")
 _fname_label = f"case_{_active_cid}.npy" if _active_cid else "archivo .npy"
 st.plotly_chart(
     plot_ecg_signal(
         _disp_sig, TARGET_FS,
         title=f"ECG crudo · {_fname_label} · primeros 10 s del segmento válido",
-        start_time_offset=_disp_offset,
-        max_seconds=10.0,
+        start_time_offset=_disp_offset, max_seconds=10.0,
     ),
-    use_container_width=True,
-    config={"displayModeBar": False},
+    use_container_width=True, config={"displayModeBar": False},
 )
 
 # ---------------------------------------------------------------------------
@@ -367,32 +743,24 @@ st.plotly_chart(
 # ---------------------------------------------------------------------------
 section_title("Preprocesamiento ECG")
 
-_proc_sig = st.session_state.get("_p7_proc_signal")
-_proc_err = st.session_state.get("_p7_proc_error")
-
 if st.button("Preprocesar señal (filtro 0.5–40 Hz · normalización)", key="btn_preproc"):
     with st.spinner("Procesando…"):
         try:
             from src.pipeline import preprocess_ecg
-            st.session_state["_p7_proc_signal"] = preprocess_ecg(
-                _disp_sig, original_fs=TARGET_FS
-            )
-            st.session_state["_p7_proc_error"] = None
+            st.session_state["_p7_proc_signal"] = preprocess_ecg(_disp_sig, original_fs=TARGET_FS)
+            st.session_state["_p7_proc_error"]  = None
         except Exception as _pe:
             st.session_state["_p7_proc_error"]  = str(_pe)
             st.session_state["_p7_proc_signal"] = None
 
 _proc_sig = st.session_state.get("_p7_proc_signal")
 _proc_err = st.session_state.get("_p7_proc_error")
-
 if _proc_err:
     st.error(_proc_err)
 elif _proc_sig is not None:
     _fr, _fp = plot_raw_vs_processed(
-        _disp_sig, _proc_sig,
-        raw_fs=TARGET_FS,
-        start_time_offset=_disp_offset,
-        max_seconds=10.0,
+        _disp_sig, _proc_sig, raw_fs=TARGET_FS,
+        start_time_offset=_disp_offset, max_seconds=10.0,
     )
     col_r, col_p = st.columns(2)
     with col_r:
@@ -401,11 +769,11 @@ elif _proc_sig is not None:
         st.plotly_chart(_fp, use_container_width=True, config={"displayModeBar": False})
 
 # ===========================================================================
-# CASO A — prediction + evaluation
+# CASO A — prediction + binary evaluation (annotations available)
 # ===========================================================================
 if _is_case_a:
     st.html('<hr style="border-color:var(--line-1);margin:24px 0 16px">')
-    section_title(f"Predicción y evaluación · case_id = {_active_cid}")
+    section_title(f"Predicción binaria · case_id = {_active_cid}")
 
     _ann      = load_case_annotations(_ann_path)
     _meta_row = load_case_metadata(_active_cid)
@@ -414,17 +782,22 @@ if _is_case_a:
 
     _feat_cols_a = (
         (_meta_md.get("numeric_features", []) + _meta_md.get("categorical_features", []))
-        if _meta_md else _FEAT_COLS
+        if _meta_md else _FEAT_COLS_FALLBACK
     )
 
-    # Annotation info
-    col_ann1, col_ann2, col_ann3 = st.columns(3)
-    col_ann1.metric("Latidos anotados (válidos)", f"{len(_ann):,}")
-    col_ann2.metric("Clases reales",
-                    str(_ann["rhythm_label"].nunique()) if "rhythm_label" in _ann.columns else "—")
-    col_ann3.metric("Metadata disponible", "Sí" if _meta_row is not None else "No")
+    col_ann1, col_ann2, col_ann3, col_ann4 = st.columns(4)
+    col_ann1.metric("Latidos anotados", f"{len(_ann):,}")
+    if "rhythm_label" in _ann.columns:
+        _n_normal   = int((_ann["rhythm_label"] == "N").sum())
+        _n_abnormal = int((_ann["rhythm_label"] != "N").sum())
+        col_ann2.metric("Normal (N)",    f"{_n_normal:,}")
+        col_ann3.metric("Anormal (≠ N)", f"{_n_abnormal:,}")
+        col_ann4.metric("Clases originales", str(_ann["rhythm_label"].nunique()))
+    else:
+        col_ann2.metric("Normal",   "—")
+        col_ann3.metric("Anormal",  "—")
+        col_ann4.metric("Metadata", "Sí" if _meta_row is not None else "No")
 
-    # ECG with annotation markers
     if len(_ann) > 0:
         _ann_win = _ann[
             (_ann["time_second"] >= _disp_offset) &
@@ -434,138 +807,163 @@ if _is_case_a:
             with st.container(border=True):
                 card_header(
                     "ECG con latidos anotados",
-                    f"{len(_ann_win)} latidos en la ventana de 10 s · colores por rhythm_label",
+                    f"{len(_ann_win)} latidos en ventana de 10 s · "
+                    "colores por rhythm_label (contexto, no salida del modelo)",
                 )
                 st.plotly_chart(
                     plot_annotations_on_ecg(
                         _disp_sig, _ann_win, fs=TARGET_FS,
                         start_time_offset=_disp_offset, max_seconds=10.0,
                     ),
-                    use_container_width=True,
-                    config={"displayModeBar": False},
+                    use_container_width=True, config={"displayModeBar": False},
                 )
 
-    # Load/compute predictions
     if _model_p is None:
         callout("warn", "Modelo no disponible",
-                "No se encontró <code>models/tabular_best_model_pipeline.joblib</code>.")
+                "No se encontró <code>tabular_best_model_pipeline.joblib</code>.")
     elif len(_ann) == 0:
-        callout("warn", "Sin anotaciones válidas",
-                "El archivo de anotaciones no tiene filas con rhythm_label válido.")
+        callout("warn", "Sin anotaciones válidas", "El archivo no tiene filas con rhythm_label.")
     else:
-        # Fast path: pre-computed parquet rows (guarantees feature consistency)
         _feat_df = st.session_state.get("_p7_feat_df")
         if _feat_df is None:
             _feat_df = get_case_features_from_parquet(_active_cid, _feat_cols_a)
-            _feat_src = "parquet pre-calculado"
             if _feat_df is None:
-                # Fallback: rebuild from annotations + metadata
                 if _meta_row is None:
-                    callout(
-                        "warn", "Metadata no disponible",
-                        f"No se encontró case_id={_active_cid} en metadata.csv ni en el parquet. "
-                        "Sin las 25 features clínicas requeridas no es posible predecir.",
-                    )
-                    _feat_df = None
+                    callout("warn", "Metadata no disponible",
+                            f"No se encontró case_id={_active_cid} en el parquet.")
                 else:
                     _feat_df, _missing = build_tabular_features_from_case(
                         _ann, _meta_row, _feat_cols_a
                     )
-                    _feat_src = "reconstruido desde anotaciones + metadata"
                     if _missing:
-                        callout(
-                            "warn",
-                            f"{len(_missing)} features faltantes",
-                            "El pipeline imputará con medianas: "
-                            + ", ".join(f"<code>{f}</code>" for f in _missing),
-                        )
+                        callout("warn", f"{len(_missing)} features faltantes",
+                                ", ".join(f"<code>{f}</code>" for f in _missing))
             st.session_state["_p7_feat_df"] = _feat_df
 
         if _feat_df is not None and len(_feat_df) > 0:
-
-            # Compute predictions
-            _preds = st.session_state.get("_p7_predictions")
-            if _preds is None:
+            _preds_raw = st.session_state.get("_p7_predictions")
+            if _preds_raw is None:
                 try:
-                    _preds = predict_case_windows(_feat_df, _model_p, _feat_cols_a)
-                    st.session_state["_p7_predictions"] = _preds
+                    _preds_raw = predict_case_windows(_feat_df, _model_p, _feat_cols_a)
+                    st.session_state["_p7_predictions"] = _preds_raw
                 except Exception as _pe:
                     callout("err", "Error en predicción", str(_pe))
-                    _preds = None
+                    _preds_raw = None
 
-            if _preds is not None:
-                _y_true_a = (
+            if _preds_raw is not None:
+                _y_pred_bin = _normalize_preds(_preds_raw)
+                _y_true_str = (
                     _feat_df["rhythm_label"].to_numpy()
                     if "rhythm_label" in _feat_df.columns else None
                 )
-                _eval = evaluate_case_predictions(_y_true_a, _preds) if _y_true_a is not None else None
+                _y_true_bin = _to_binary(_y_true_str) if _y_true_str is not None else None
+                _eval = (
+                    _evaluate_binary(_y_true_bin, _y_pred_bin)
+                    if _y_true_bin is not None else None
+                )
 
-                if _eval and _eval.get("warning"):
-                    callout("warn", "Advertencia de predicción", _eval["warning"])
+                st.write("")
+                section_title("Métricas binarias del caso")
 
-                # KPIs
-                e1, e2, e3, e4 = st.columns(4)
-                e1.metric("Latidos evaluados",
-                          f"{_eval['n_beats']:,}" if _eval else f"{len(_preds):,}")
-                e2.metric("Aciertos",
-                          f"{_eval['n_correct']:,}" if _eval else "—")
-                e3.metric("Accuracy del caso",
-                          f"{_eval['accuracy']:.1%}" if _eval and _eval['accuracy'] is not None else "—")
-                e4.metric("Clases presentes",
-                          str(len(_eval['classes_present'])) if _eval else "—")
+                e1, e2, e3, e4, e5, e6 = st.columns(6)
+                e1.metric("Evaluados",
+                          f"{_eval['n']:,}" if _eval else f"{len(_y_pred_bin):,}")
+                e2.metric("Accuracy",
+                          f"{_eval['accuracy']:.1%}" if _eval and _eval.get('accuracy') is not None else "—")
+                e3.metric("Balanced acc.",
+                          f"{_eval['balanced']:.1%}" if _eval and _eval.get('balanced') is not None else "—")
+                e4.metric("Precision Anormal",
+                          f"{_eval['precision']:.1%}" if _eval and _eval.get('precision') is not None else "—")
+                e5.metric("Recall Anormal",
+                          f"{_eval['recall']:.1%}" if _eval and _eval.get('recall') is not None else "—")
+                e6.metric("F1 Anormal",
+                          f"{_eval['f1']:.1%}" if _eval and _eval.get('f1') is not None else "—")
 
-                # Build predictions DataFrame for visualization
-                _pred_vis_df = _feat_df[["time_second", "rhythm_label"]].copy() if "time_second" in _feat_df.columns else pd.DataFrame()
+                if _eval and _eval.get("cm") is not None:
+                    st.write("")
+                    section_title("Matriz de confusión binaria (caso actual)")
+                    _cm = _eval["cm"]
+                    _cm_df = pd.DataFrame(
+                        _cm,
+                        index=["Real: Normal", "Real: Anormal"],
+                        columns=["Pred: Normal", "Pred: Anormal"],
+                    )
+                    with st.container(border=True):
+                        st.dataframe(_cm_df, use_container_width=False)
+                        _tn, _fp_v, _fn, _tp = _cm.ravel() if _cm.size == 4 else (0, 0, 0, 0)
+                        st.caption(
+                            f"TN={_tn:,}  FP={_fp_v:,}  FN={_fn:,}  TP={_tp:,} "
+                            "· positivo = Anormal"
+                        )
+
+                _pred_vis_df = (
+                    _feat_df[["time_second", "rhythm_label"]].copy()
+                    if "time_second" in _feat_df.columns else pd.DataFrame()
+                )
                 if "beat_type" in _feat_df.columns:
                     _pred_vis_df["beat_type"] = _feat_df["beat_type"].values
-                _pred_vis_df["prediccion"] = _preds
+                _pred_vis_df["prediccion"] = _y_pred_bin
 
-                # ECG with prediction regions
                 st.write("")
                 section_title("ECG con regiones predichas")
                 _max_ecg_sec = st.slider(
-                    "Ventana ECG (segundos)", min_value=10, max_value=60, value=30,
-                    step=5, key="ecg_window_slider",
+                    "Ventana ECG (segundos)", min_value=10, max_value=60,
+                    value=30, step=5, key="ecg_window_slider",
                 )
+
+                with st.expander("Debug — predicciones para el gráfico ECG", expanded=False):
+                    st.write("Columnas de _pred_vis_df:", _pred_vis_df.columns.tolist())
+                    st.write("start_offset (_disp_offset):", _disp_offset)
+                    st.write("time_second range:",
+                             float(_pred_vis_df["time_second"].min()) if "time_second" in _pred_vis_df.columns else "N/A",
+                             "→",
+                             float(_pred_vis_df["time_second"].max()) if "time_second" in _pred_vis_df.columns else "N/A")
+                    if "prediccion" in _pred_vis_df.columns:
+                        st.write("prediccion value_counts:", _pred_vis_df["prediccion"].value_counts(dropna=False).to_dict())
+                    else:
+                        st.write("⚠ columna 'prediccion' NO encontrada")
+
                 with st.container(border=True):
                     st.plotly_chart(
                         plot_ecg_with_prediction_regions(
-                            _disp_sig, TARGET_FS,
-                            _pred_vis_df,
-                            time_col="time_second",
-                            pred_col="prediccion",
-                            real_col="rhythm_label",
-                            beat_type_col="beat_type",
-                            max_seconds=float(_max_ecg_sec),
-                            start_offset=_disp_offset,
+                            _disp_sig, TARGET_FS, _pred_vis_df,
+                            time_col="time_second", pred_col="prediccion",
+                            real_col="rhythm_label", beat_type_col="beat_type",
+                            max_seconds=float(_max_ecg_sec), start_offset=_disp_offset,
                         ),
-                        use_container_width=True,
-                        config={"displayModeBar": False},
+                        use_container_width=True, config={"displayModeBar": False},
                     )
                     st.caption(
-                        "Regiones coloreadas por ritmo predicho. "
-                        "Triángulos rojos = predicción incorrecta (real ≠ predicho)."
+                        "Normal = gris · Anormal = rojo. "
+                        "rhythm_label original mostrado como contexto."
                     )
 
-                # Comparison table
                 st.write("")
-                section_title("Tabla de comparación: real vs predicción")
-                _show_cols = ["time_second", "rhythm_label"]
+                section_title("Tabla: Real vs Predicción binaria")
+
+                _show_cols_base = ["time_second", "rhythm_label"]
                 if "beat_type" in _feat_df.columns:
-                    _show_cols.append("beat_type")
-                _res_df = _feat_df[_show_cols].copy()
-                _res_df["prediccion"] = _preds
-                if _y_true_a is not None:
-                    _res_df["correcto"] = (
-                        pd.Series(np.asarray(_y_true_a).astype(str))
-                        == pd.Series(np.asarray(_preds).astype(str))
-                    ).map({True: "✓", False: "✗"}).values
-                _res_df["time_second"] = _res_df["time_second"].round(3)
+                    _show_cols_base.append("beat_type")
+                _res_df = _feat_df[_show_cols_base].copy()
+                _res_df["Real"]       = [_display(v) for v in (_y_true_bin if _y_true_bin is not None else ["—"] * len(_y_pred_bin))]
+                _res_df["Predicción"] = [_display(v) for v in _y_pred_bin]
+                if _y_true_bin is not None:
+                    _correct_mask = pd.Series(
+                        np.asarray(_y_true_bin).astype(str) == np.asarray(_y_pred_bin).astype(str),
+                        index=_res_df.index,
+                    )
+                    _res_df["✓/✗"] = _correct_mask.map({True: "✓", False: "✗"})
+                if "time_second" in _res_df.columns:
+                    _res_df["time_second"] = _res_df["time_second"].round(3)
 
                 col_filt, _ = st.columns([2, 6])
                 with col_filt:
-                    _show_all = st.checkbox("Mostrar solo errores", value=False)
-                _res_display = _res_df.loc[_res_df["correcto"] == "✗"] if _show_all else _res_df
+                    _show_errors = st.checkbox("Mostrar solo errores", value=False)
+                _res_display = (
+                    _res_df[_res_df["✓/✗"] == "✗"]
+                    if _show_errors and "✓/✗" in _res_df.columns
+                    else _res_df
+                )
 
                 with st.container(border=True):
                     st.dataframe(
@@ -573,46 +971,54 @@ if _is_case_a:
                         use_container_width=True,
                         hide_index=True,
                         column_config={
-                            "correcto": st.column_config.TextColumn(width="small"),
+                            "✓/✗":         st.column_config.TextColumn(width="small"),
                             "time_second": st.column_config.NumberColumn(
-                                "time (s)", format="%.3f", width="small"
-                            ),
+                                "time (s)", format="%.3f", width="small"),
+                            "rhythm_label":st.column_config.TextColumn(
+                                "rhythm_label (original)", width="medium"),
+                            "Real":        st.column_config.TextColumn(
+                                "Real (binario)", width="medium"),
+                            "Predicción":  st.column_config.TextColumn(
+                                "Predicción", width="medium"),
                         },
                     )
                     st.caption(
-                        "beat_type es descriptivo únicamente — no entra al modelo. "
+                        "rhythm_label es contexto — evaluación: Normal (N) vs Anormal (≠ N). "
                         f"Mostrando {min(len(_res_display), 300):,} de {len(_res_display):,} filas."
                     )
 
-                # Top errors
-                if _eval and _eval["error_table"] is not None and len(_eval["error_table"]) > 0:
-                    with st.expander("Principales errores de clasificación", expanded=False):
-                        st.dataframe(
-                            _eval["error_table"],
-                            use_container_width=True, hide_index=True,
-                        )
+                if _y_true_bin is not None and "✓/✗" in _res_df.columns:
+                    n_err = (_res_df["✓/✗"] == "✗").sum()
+                    if n_err > 0:
+                        with st.expander(f"Errores de clasificación ({n_err:,})", expanded=False):
+                            err_tbl = (
+                                _res_df[_res_df["✓/✗"] == "✗"]
+                                .groupby(["Real", "Predicción"])
+                                .size()
+                                .reset_index(name="count")
+                                .sort_values("count", ascending=False)
+                            )
+                            st.dataframe(err_tbl, use_container_width=True, hide_index=True)
 
                 callout(
                     "warn",
                     "Demo académica — no para uso clínico",
-                    "Resultados exploratorios. El modelo fue entrenado con otros casos; "
-                    "la accuracy reportada aquí no coincide necesariamente con las métricas oficiales.",
+                    "Resultados sobre un caso individual. "
+                    "Métricas oficiales: test_f1_macro=0.615, accuracy=0.633.",
                 )
 
 # ===========================================================================
-# CASO B — solo visualización
+# ECG sin anotaciones — solo visualización
 # ===========================================================================
 else:
     st.html('<hr style="border-color:var(--line-1);margin:24px 0 16px">')
     callout(
         "warn",
-        "No se encontraron anotaciones reales para este archivo",
-        "El modelo tabular requiere <b>30 features</b>: "
-        "5 derivadas de anotaciones de latidos (RR intervals, posición) "
-        "y 25 de metadata clínica del caso. "
-        "Sin estas fuentes no es posible construir el vector de features, "
-        "por lo que esta carga se limita a visualización y preprocesamiento. "
-        "<br><br>"
+        "Sin anotaciones — solo visualización ECG disponible",
+        "El modelo binario requiere features tabulares: RR intervals derivados de "
+        "anotaciones de latidos + metadata clínica. "
         "Para evaluación completa, el archivo debe llamarse <code>case_XXXX.npy</code> "
-        "y existir el <code>Annotation_file_XXXX.csv</code> correspondiente.",
+        "y debe existir el archivo de anotaciones correspondiente.",
     )
+
+page_footer()

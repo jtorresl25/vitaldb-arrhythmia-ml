@@ -109,6 +109,24 @@ data/raw/vitaldb_waveforms/*
 !models/*.joblib
 
 # ============================================================================
+# Artefactos de Streamlit Cloud — frontend/app/app_artifacts/ se incluye en Git.
+# Las excepciones deben ir DESPUES de las reglas globales para tener precedencia.
+!frontend/app/app_artifacts/
+!frontend/app/app_artifacts/**
+!frontend/app/app_artifacts/models/
+!frontend/app/app_artifacts/models/**
+!frontend/app/app_artifacts/reports/
+!frontend/app/app_artifacts/reports/**
+!frontend/app/app_artifacts/reports/tables/
+!frontend/app/app_artifacts/reports/tables/**
+!frontend/app/app_artifacts/reports/figures/
+!frontend/app/app_artifacts/reports/figures/**
+!frontend/app/app_artifacts/demo/
+!frontend/app/app_artifacts/demo/**
+!frontend/app/app_artifacts/demo/npy_cases/
+!frontend/app/app_artifacts/demo/npy_cases/**
+
+# ============================================================================
 # Reportes generados automáticamente
 # ============================================================================
 reports/figures/*

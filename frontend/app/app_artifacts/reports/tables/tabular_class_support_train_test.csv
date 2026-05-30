@@ -1,0 +1,4 @@
+class,train,test,total
+abnormal,196575,50262,246837
+normal,313712,78911,392623
+TOTAL,510287,129173,639460

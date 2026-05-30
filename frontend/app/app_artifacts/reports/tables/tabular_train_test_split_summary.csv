@@ -1,0 +1,12 @@
+metric,value
+chosen_seed,42
+n_classes_covered,2
+n_total_classes,2
+n_train_groups,385
+n_test_groups,97
+n_train_rows,510287
+n_test_rows,129173
+actual_test_fraction,0.202
+requested_test_size,0.2
+classes_only_in_train,
+classes_only_in_test,

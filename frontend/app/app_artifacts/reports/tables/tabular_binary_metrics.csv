@@ -1,0 +1,2 @@
+tn_normal,fp_abnormal_false_alarm,fn_abnormal_missed,tp_abnormal,sensitivity_recall_abnormal,specificity_recall_normal,precision_abnormal,f1_abnormal,accuracy
+54625,24286,23180,27082,0.5388166010107039,0.6922355565130337,0.5272153870113689,0.5329528682475647,0.6325393077500716

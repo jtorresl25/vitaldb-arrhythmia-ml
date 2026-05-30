@@ -2,7 +2,7 @@ import streamlit as st
 
 import pandas as pd
 
-from components.layout import page_header
+from components.layout import page_header, page_footer
 from components.cards import callout, card_header, kv_table, metric_card, section_title
 from components.badges import badge, badge_row
 from components.charts import bar_chart_h, apply_dark_layout
@@ -11,8 +11,6 @@ from utils.loaders import (
     load_feature_importance,
     load_feature_columns,
     load_model_metadata,
-    load_model_comparison,
-    correlation_figure_path,
 )
 
 # ── Bootstrap ─────────────────────────────────────────────────────────────────
@@ -201,11 +199,9 @@ def _find_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
 # ── Load data ─────────────────────────────────────────────────────────────────
 df_imp       = load_feature_importance()
 feature_cols = load_feature_columns()
-corr_png     = correlation_figure_path()
 
 has_imp  = df_imp is not None and not df_imp.empty
 has_cols = feature_cols is not None
-has_corr = corr_png is not None
 
 if not has_imp:
     callout(
@@ -491,38 +487,56 @@ with grp_col2:
 
 st.write("")
 
-# ── Correlation heatmap ────────────────────────────────────────────────────────
-section_title("Mapa de correlación entre features")
+# ── Correlation section (text-only, no image) ─────────────────────────────────
+section_title("Correlación entre variables")
 
-if has_corr:
+callout(
+    "warn",
+    "Variables correlacionadas — efecto en la interpretación",
+    "Algunas variables del modelo pueden estar correlacionadas entre sí, especialmente "
+    "las derivadas de intervalos RR y variables estadísticas relacionadas "
+    "(<code>rr_prev</code> / <code>rr_next</code>, <code>case_rr_std</code> / <code>case_rr_rmssd</code>). "
+    "En modelos lineales como <b>Linear SVC</b>, la importancia puede repartirse entre variables "
+    "correlacionadas: el modelo puede asignar un peso pequeño a dos variables que en realidad "
+    "representan el mismo concepto. "
+    "Por eso, los coeficientes deben interpretarse como <b>evidencia predictiva global</b>, "
+    "no como causalidad clínica.",
+)
+
+st.markdown("<div style='margin-top:12px'></div>", unsafe_allow_html=True)
+
+col_c1, col_c2, col_c3 = st.columns(3)
+
+with col_c1:
     with st.container(border=True):
-        card_header(
-            "Correlación de Pearson entre features",
-            "imagen exportada por el pipeline",
-            right_html=badge("PNG", "ok"),
-        )
-        st.image(str(corr_png), use_container_width=True)
+        card_header("RR intervals", "variables de ritmo")
+        kv_table([
+            ("Variables",     "<code>rr_prev</code>, <code>rr_next</code>, "
+                              "<code>hr_inst_from_rr_prev</code>"),
+            ("Correlación",   "Alta entre sí — representan el mismo concepto de ritmo"),
+            ("Interpretación","El modelo detecta irregularidad en el intervalo entre latidos, "
+                              "clave para distinguir Normal de Anormal"),
+        ])
 
-    callout(
-        "warn",
-        "Features correlacionadas — efecto en la interpretación",
-        "Algunas features presentan alta correlación entre sí (p. ej. "
-        "<code>std</code> y <code>var</code> o "
-        "<code>case_rr_std</code> y <code>case_rr_rmssd</code>). "
-        "En modelos lineales, features muy correlacionadas "
-        "<b>reparten artificialmente su importancia</b>: el modelo puede dar un peso pequeño "
-        "a dos features correlacionadas cuando en realidad ambas representan la misma información. "
-        "La importancia real del concepto subyacente es la <i>suma</i> de las dos, "
-        "no cada una por separado. Esto debe considerarse al interpretar los rankings.",
-    )
-else:
-    st.html(
-        '<div class="placeholder-block" style="min-height:100px;padding:20px">'
-        '<div class="ph-mono">imagen no encontrada</div>'
-        '<div class="ph-title">Heatmap de correlación</div>'
-        '<div class="ph-desc">No se encontró reports/figures/feature_correlation_heatmap.png</div>'
-        '</div>'
-    )
+with col_c2:
+    with st.container(border=True):
+        card_header("Metadatos clínicos", "variables de contexto")
+        kv_table([
+            ("Variables",     "Demografía, labs preoperatorios, drogas intraoperatorias"),
+            ("Correlación",   "Moderada en variables de la misma categoría clínica"),
+            ("Interpretación","Aportan contexto del paciente; no son causales directos "
+                              "del ritmo, sino factores de riesgo asociados"),
+        ])
+
+with col_c3:
+    with st.container(border=True):
+        card_header("One-Hot Encoding", "variables categóricas")
+        kv_table([
+            ("Variables",     "sex, department, optype, ane_type, iv1, aline1…"),
+            ("Expansión",     "16 variables categóricas → múltiples columnas binarias"),
+            ("Interpretación","La importancia se distribuye entre columnas del mismo grupo; "
+                              "sumar las columnas da la importancia real de la variable original"),
+        ])
 
 st.write("")
 
@@ -615,14 +629,18 @@ with lim2:
     )
     callout(
         "warn",
-        "Desempeño desigual entre clases",
-        "El análisis de importancia es global. Las features que explican bien AFIB/AFL "
-        "pueden no ser las mismas que explican las clases minoritarias (AVB, VT, SVTA).",
+        "Importancia global — no discrimina entre clases",
+        "La importancia refleja el comportamiento medio del modelo sobre todo el dataset. "
+        "Las features que separan bien la clase Normal pueden no ser las mismas "
+        "que detectan mejor los casos Anormales con arritmias menos frecuentes.",
     )
     callout(
         "info",
         "Cómo mejorar esta página",
         "Para interpretabilidad local, añadir SHAP values o "
-        "Permutation Importance (más robusto que coeficientes para SVC). "
-        "El heatmap interactivo se habilitaría exportando el CSV de correlaciones.",
+        "Permutation Importance (más robusto que coeficientes para SVC lineal). "
+        "Ambas técnicas permiten explicar por qué un latido específico fue clasificado "
+        "como Normal o Anormal.",
     )
+
+page_footer()

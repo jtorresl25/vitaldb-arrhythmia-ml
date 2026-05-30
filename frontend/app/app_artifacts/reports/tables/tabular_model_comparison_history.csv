@@ -1,0 +1,6 @@
+model,status,test_f1_macro,test_precision_macro,test_recall_macro,test_accuracy,test_balanced_accuracy,test_f1_weighted,fit_seconds,run_type,notes
+logreg,ok,0.618,0.650,0.623,0.648,0.623,0.631,40.042,exploratory_150_cases,Benchmark exploratorio - no resultado final
+linear_svc,ok,0.641,0.705,0.649,0.679,0.649,0.655,90.098,exploratory_150_cases,Benchmark exploratorio - no resultado final
+decision_tree,ok,0.556,0.563,0.558,0.576,0.558,0.567,17.455,exploratory_150_cases,Benchmark exploratorio - no resultado final
+random_forest,ok,0.624,0.700,0.636,0.669,0.636,0.639,100.253,exploratory_150_cases,Benchmark exploratorio - no resultado final
+mlp,ok,0.718,0.742,0.716,0.734,0.716,0.726,213.265,exploratory_150_cases,Ganó la corrida exploratoria pero no fue seleccionado como modelo final por no ser interpretable y presentar advertencias de convergencia

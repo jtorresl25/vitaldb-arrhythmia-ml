@@ -1,0 +1,2 @@
+model,status,n_iter_effective,fit_seconds,best_cv_score_primary,cv_f1_macro,cv_precision_macro,cv_recall_macro,cv_accuracy,cv_balanced_accuracy,cv_f1_weighted
+linear_svc,ok,10,1104.6005511283875,0.6273106865006167,0.6273106865006167,0.6295227077247965,0.6354099793767536,0.6353415183590088,0.6354099793767536,0.6396183980456058

@@ -2,7 +2,7 @@ import streamlit as st
 
 import pandas as pd
 
-from components.layout import page_header
+from components.layout import page_header, page_footer
 from components.cards import metric_card, callout, section_title, kv_table
 from components.badges import badge, badge_row
 from components.charts import class_f1_bar, support_vs_f1_scatter, bar_chart_h
@@ -16,7 +16,7 @@ _winner_badge = meta.get("winner_model", "—").replace("_", " ").title() if met
 page_header(
     "Evaluación por clase",
     "Desempeño del modelo ganador en cada tipo de arritmia. "
-    "F1-score, soporte (ventanas de test) y análisis de clases difíciles.",
+    "F1-score, soporte (registros de test) y análisis de clases difíciles.",
     badge_html=badge_row(badge(_winner_badge, "winner"), badge("Análisis por clase", "info")),
 )
 
@@ -116,7 +116,7 @@ with col_good:
                 supv = int(df_classes.loc[cls, sup_col])  if sup_col else 0
                 st.markdown(
                     f"· **{cls}** — {badge(f'F1 {f1v:.3f}', 'ok')} "
-                    f"<span style='color:#8b9cbd;font-size:0.85em'>{supv:,} ventanas</span>",
+                    f"<span style='color:#8b9cbd;font-size:0.85em'>{supv:,} registros</span>",
                     unsafe_allow_html=True,
                 )
         else:
@@ -135,7 +135,7 @@ with col_med:
                 supv = int(df_classes.loc[cls, sup_col])  if sup_col else 0
                 st.markdown(
                     f"· **{cls}** — {badge(f'F1 {f1v:.3f}', 'info')} "
-                    f"<span style='color:#8b9cbd;font-size:0.85em'>{supv:,} ventanas</span>",
+                    f"<span style='color:#8b9cbd;font-size:0.85em'>{supv:,} registros</span>",
                     unsafe_allow_html=True,
                 )
         else:
@@ -155,7 +155,7 @@ with col_hard:
                 kind = "err" if supv < 500 else "warn"
                 st.markdown(
                     f"· **{cls}** — {badge(f'F1 {f1v:.3f}', kind)} "
-                    f"<span style='color:#8b9cbd;font-size:0.85em'>{supv:,} ventanas</span>",
+                    f"<span style='color:#8b9cbd;font-size:0.85em'>{supv:,} registros</span>",
                     unsafe_allow_html=True,
                 )
         else:
@@ -182,7 +182,7 @@ with chart_col1:
 
 with chart_col2:
     with st.container(border=True):
-        st.markdown("**Soporte por clase** (ventanas de test, escala log)")
+        st.markdown("**Soporte por clase** (registros de test, escala log)")
         if sup_values:
             st.plotly_chart(
                 bar_chart_h(
@@ -271,10 +271,10 @@ if tier_good and sup_col:
     best_cls_sup = int(df_classes.loc[tier_good[0], sup_col])
     interp_body = (
         f"El modelo **{_winner_name}** clasifica mejor las clases con mayor soporte "
-        f"(**{tier_good[0]}** F1={best_f1:.3f}, {best_cls_sup:,} ventanas), "
+        f"(**{tier_good[0]}** F1={best_f1:.3f}, {best_cls_sup:,} registros), "
         f"pero tiene dificultades con clases poco representadas. "
-        f"Las **{n_hard} clases difíciles** (F1 < 0.30) incluyen algunas con muy pocas ventanas de test "
-        f"(p.ej. *{min_sup_row}*: {min_sup_val} ventanas), lo que limita la capacidad del modelo. "
+        f"Las **{n_hard} clases difíciles** (F1 < 0.30) incluyen algunas con muy pocos registros de test "
+        f"(p.ej. *{min_sup_row}*: {min_sup_val} registros), lo que limita la capacidad del modelo. "
         f"El F1-macro de **{avg_f1:.3f}** refleja este desequilibrio de clases. "
         f"Estrategias como oversampling de clases minoritarias o más features RR podrían mejorar el rendimiento."
     )
@@ -285,3 +285,5 @@ else:
     )
 
 callout("info", "Interpretacion", interp_body)
+
+page_footer()

@@ -5,6 +5,8 @@ All functions return go.Figure objects; callers pass them to st.plotly_chart().
 
 from __future__ import annotations
 
+from itertools import groupby as _groupby
+
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -188,6 +190,76 @@ def plot_annotations_on_ecg(
 
 
 # ---------------------------------------------------------------------------
+# Binary prediction helpers
+# ---------------------------------------------------------------------------
+_BINARY_NORMAL_STRS = frozenset({"normal", "n", "0", "false"})
+
+_COLOR_NORMAL_LINE   = "#cbd5e1"        # gray/light — normal prediction
+_COLOR_ABNORMAL_LINE = "#ef4444"        # red — abnormal prediction
+_WIDTH_NORMAL_LINE   = 1.2
+_WIDTH_ABNORMAL_LINE = 1.8
+
+
+def _is_abnormal_pred(x) -> bool:
+    """Return True if x represents an abnormal binary prediction."""
+    s = str(x).strip().lower()
+    return bool(s) and s not in _BINARY_NORMAL_STRS and s != "nan"
+
+
+def _is_binary_pred_col(series: pd.Series) -> bool:
+    """True if all non-null values in the series are binary labels."""
+    unique = {str(v).strip().lower() for v in series.dropna() if str(v).strip() not in ("", "nan")}
+    if not unique:
+        return False
+    return unique.issubset({"normal", "abnormal", "anormal", "0", "1", "n", "false", "true"})
+
+
+def _rhythm_label_to_binary(label: str) -> str:
+    """Convert an original rhythm_label to binary ('normal' / 'abnormal')."""
+    return "normal" if str(label).strip() == "N" else "abnormal"
+
+
+def _build_binary_segment_traces(
+    sig: np.ndarray,
+    t_arr: np.ndarray,
+    pred_mask: np.ndarray,
+) -> list[go.Scatter]:
+    """One go.Scatter per contiguous same-prediction run, colored by prediction.
+
+    pred_mask is a boolean array (True = abnormal) aligned with t_arr / sig.
+    Legend entries are de-duplicated: one per class.
+    """
+    traces: list[go.Scatter] = []
+    seen: set[str] = set()
+
+    for is_abn, grp in _groupby(range(len(pred_mask)), key=lambda i: bool(pred_mask[i])):
+        idx = list(grp)
+        # Include one overlap sample to avoid visible gaps at segment boundaries
+        if idx[-1] + 1 < len(t_arr):
+            idx.append(idx[-1] + 1)
+
+        color  = _COLOR_ABNORMAL_LINE if is_abn else _COLOR_NORMAL_LINE
+        width  = _WIDTH_ABNORMAL_LINE if is_abn else _WIDTH_NORMAL_LINE
+        name   = "Predicción: Anormal" if is_abn else "Predicción: Normal"
+        key    = "abn" if is_abn else "nor"
+        show   = key not in seen
+        seen.add(key)
+
+        traces.append(go.Scatter(
+            x=t_arr[idx],
+            y=sig[idx],
+            mode="lines",
+            name=name,
+            line=dict(color=color, width=width),
+            showlegend=show,
+            legendgroup=key,
+            hovertemplate=f"t=%{{x:.3f}} s  amp=%{{y:.4f}}<extra>{name}</extra>",
+        ))
+
+    return traces
+
+
+# ---------------------------------------------------------------------------
 # plot_ecg_with_prediction_regions
 # ---------------------------------------------------------------------------
 
@@ -232,149 +304,255 @@ def plot_ecg_with_prediction_regions(
     title: str = "ECG con regiones predichas por el modelo",
     height: int = 400,
 ) -> go.Figure:
-    """ECG trace con regiones coloreadas solo donde el modelo predice ritmo anómalo.
+    """ECG trace coloreado según la predicción binaria del modelo.
 
-    Reglas visuales:
-    - ``pred == "N"``:     sin sombreado (fondo oscuro limpio).
-    - ``pred != "N"``:     franja de color sobre la señal ECG.
-    - ``real != pred``:    marcador rojo ✕ en la cima de la señal, con tooltip detallado.
+    Modo binario (pred_col = "normal" / "abnormal"):
+      - Tramos normales: línea gris clara (#cbd5e1, grosor 1.2).
+      - Tramos anormales: línea roja (#ef4444, grosor 1.8).
+      - Marcadores ✕ donde real (binarizado) ≠ predicción.
 
-    La señal ECG aparece en gris claro encima de los sombreados.
+    Modo multiclase (pred_col = rhythm labels "N", "AFIB/AFL", …):
+      - Franjas de color de fondo por ritmo predicho (comportamiento anterior).
+      - Línea ECG gris uniforme.
     """
-    # --- Señal recortada a la ventana de visualización ---
+    # ── Señal recortada ────────────────────────────────────────────────────
     sig = np.asarray(signal, dtype=float).ravel()
-    n_disp = min(len(sig), int(max_seconds * fs))
-    t_arr = _time_axis(n_disp, fs, offset=start_offset)
-    t_end = float(t_arr[-1])
-
-    # Amplitud real de la señal para posicionar marcadores
+    n_disp    = min(len(sig), int(max_seconds * fs))
+    t_arr     = _time_axis(n_disp, fs, offset=start_offset)
+    t_end     = float(t_arr[-1])
     valid_sig = sig[:n_disp]
-    sig_valid_vals = valid_sig[~np.isnan(valid_sig)]
-    y_max = float(np.max(sig_valid_vals)) if len(sig_valid_vals) else 1.0
-    y_min = float(np.min(sig_valid_vals)) if len(sig_valid_vals) else -1.0
-    y_span = y_max - y_min if y_max > y_min else 1.0
-    # Marcadores de error: 90% de la altura máxima de la señal
-    marker_y = y_max + y_span * 0.08
 
-    # --- Filtrar latidos en la ventana ---
-    pdf = predictions_df.copy()
-    pdf = pdf.loc[
-        (pdf[time_col] >= start_offset - 1.0) &
-        (pdf[time_col] <= t_end + 1.0)
-    ].sort_values(time_col).reset_index(drop=True)
+    sig_vals  = valid_sig[~np.isnan(valid_sig)]
+    y_max     = float(np.max(sig_vals))  if len(sig_vals) else  1.0
+    y_min     = float(np.min(sig_vals))  if len(sig_vals) else -1.0
+    y_span    = y_max - y_min if y_max > y_min else 1.0
+    marker_y  = y_max + y_span * 0.08
+
+    # ── Filtrar y ordenar predicciones en la ventana visible ───────────────
+    if predictions_df is None or predictions_df.empty or time_col not in predictions_df.columns:
+        # Fallback: plain gray ECG, no predictions
+        fig = go.Figure(go.Scatter(
+            x=t_arr, y=valid_sig, mode="lines",
+            name="ECG", line=dict(color="#d1d5db", width=1.1),
+            hovertemplate="t=%{x:.3f} s  amp=%{y:.4f}<extra></extra>",
+            showlegend=False,
+        ))
+        apply_dark_layout(
+            fig,
+            title=dict(text=title, font=dict(size=12, color="#c8d2e5")),
+            height=height,
+            margin=dict(l=44, r=10, t=40, b=32),
+            xaxis=dict(**_dark_axes(), title=dict(text="tiempo (s)", font=dict(size=10))),
+            yaxis=dict(**_dark_axes(), title=dict(text="amplitud", font=dict(size=10))),
+        )
+        return fig
+
+    # Sort all predictions; NO tight time pre-filter — per-beat loop clips to window.
+    # A tight pre-filter based on start_offset silently drops all beats when the
+    # .npy fragment's time reference doesn't match annotation time_second values.
+    pdf = (
+        predictions_df
+        .sort_values(time_col)
+        .reset_index(drop=True)
+        .copy()
+    )
 
     fig = go.Figure()
 
-    # --- Regiones de fondo: solo para predicciones anómalas ---
-    if len(pdf) > 0 and pred_col in pdf.columns:
-        beat_times  = pdf[time_col].tolist()
-        pred_labels = pdf[pred_col].tolist()
+    # ── Detect binary vs multiclass ────────────────────────────────────────
+    # Use the full (unfiltered) pdf for detection so an empty window doesn't
+    # accidentally trigger multiclass mode.
+    use_binary = (
+        pred_col in pdf.columns
+        and len(pdf) > 0
+        and _is_binary_pred_col(pdf[pred_col])
+    )
 
-        # Calcular límite derecho de cada región = tiempo del latido siguiente
-        if len(beat_times) >= 2:
-            rr_last = beat_times[-1] - beat_times[-2]
-            next_times = beat_times[1:] + [beat_times[-1] + rr_last]
-        else:
-            next_times = [beat_times[0] + 1.0]
+    # ══════════════════════════════════════════════════════════════════════
+    # BINARY MODE — color the ECG line by prediction
+    # ══════════════════════════════════════════════════════════════════════
+    if use_binary:
+        visible_start = start_offset
+        visible_end   = t_end
+        legend_seen: dict[str, bool] = {"normal": False, "abnormal": False}
+        traces_added  = 0
 
-        # Agrupar runs consecutivos con el mismo label anómalo
-        runs: list[tuple[float, float, str]] = []
-        run_start = beat_times[0]
-        run_label = pred_labels[0]
-        for i in range(1, len(beat_times)):
-            if pred_labels[i] != run_label:
-                if run_label != _NORMAL_LABEL:
-                    runs.append((run_start, next_times[i - 1], run_label))
-                run_start = beat_times[i]
-                run_label = pred_labels[i]
-        if run_label != _NORMAL_LABEL:
-            runs.append((run_start, next_times[-1], run_label))
+        for i in range(len(pdf)):
+            row      = pdf.iloc[i]
+            pred     = row[pred_col]
+            seg_s    = float(row[time_col])
+            seg_e    = float(pdf.iloc[i + 1][time_col]) if i < len(pdf) - 1 else visible_end
 
-        for r_start, r_end, r_label in runs:
-            rs = max(r_start, start_offset)
-            re = min(r_end, t_end)
-            if re <= rs:
+            # Clip to visible window
+            seg_s = max(seg_s, visible_start)
+            seg_e = min(seg_e, visible_end)
+
+            if seg_e <= seg_s:
                 continue
-            fill   = _REGION_COLORS.get(r_label, _REGION_DEFAULT)
-            border = _REGION_BORDER.get(r_label, _REGION_DEFAULT_BORDER)
-            fig.add_shape(
-                type="rect",
-                x0=rs, x1=re,
-                y0=0, y1=1, yref="paper",
-                fillcolor=fill,
-                line=dict(color=border, width=1),
-                layer="below",
+
+            mask = (t_arr >= seg_s) & (t_arr < seg_e)
+            if mask.sum() < 2:
+                continue
+
+            is_abn = _is_abnormal_pred(pred)
+            key    = "abnormal" if is_abn else "normal"
+            name   = "Predicción: Anormal" if is_abn else "Predicción: Normal"
+
+            fig.add_trace(go.Scatter(
+                x=t_arr[mask],
+                y=valid_sig[mask],
+                mode="lines",
+                line=dict(
+                    color="#ef4444" if is_abn else "#cbd5e1",
+                    width=2.0 if is_abn else 1.2,
+                ),
+                name=name,
+                showlegend=not legend_seen[key],
+                hovertemplate=(
+                    f"tiempo=%{{x:.2f}}s<br>amplitud=%{{y:.3f}}<br>"
+                    f"predicción={'Anormal' if is_abn else 'Normal'}"
+                    "<extra></extra>"
+                ),
+            ))
+            legend_seen[key] = True
+            traces_added += 1
+
+        # Fallback: if no beats landed in the visible window, draw plain gray ECG
+        if traces_added == 0:
+            fig.add_trace(go.Scatter(
+                x=t_arr, y=valid_sig, mode="lines",
+                name="ECG sin predicción",
+                line=dict(color="#d1d5db", width=1.1),
+                hovertemplate="t=%{x:.3f} s  amp=%{y:.4f}<extra></extra>",
+                showlegend=False,
+            ))
+
+        # Error markers: binarized real_col ≠ binarized pred_col
+        if real_col in pdf.columns:
+            pdf["_real_bin"] = pdf[real_col].apply(_rhythm_label_to_binary)
+            pdf["_pred_bin"] = pdf[pred_col].apply(
+                lambda x: "abnormal" if _is_abnormal_pred(x) else "normal"
             )
+            err_df = pdf.loc[
+                (pdf["_real_bin"] != pdf["_pred_bin"]) &
+                (pdf[time_col] >= visible_start) &
+                (pdf[time_col] <= visible_end)
+            ]
+            if not err_df.empty:
+                has_btype = beat_type_col in err_df.columns
+                err_hover = [
+                    f"t = {row[time_col]:.3f} s<br>"
+                    f"real: <b>{row[real_col]}</b> → binario: <b>{row['_real_bin']}</b><br>"
+                    f"predicho: <b>{row['_pred_bin']}</b><br>"
+                    + (f"beat_type: {row[beat_type_col]}" if has_btype else "")
+                    for _, row in err_df.iterrows()
+                ]
+                fig.add_trace(go.Scatter(
+                    x=err_df[time_col].tolist(),
+                    y=[marker_y] * len(err_df),
+                    mode="markers",
+                    marker=dict(symbol="x", size=9,
+                                color="#f87171",
+                                line=dict(color="#b91c1c", width=1.5)),
+                    name="Error (real ≠ pred)",
+                    showlegend=True,
+                    text=err_hover,
+                    hovertemplate="%{text}<extra></extra>",
+                ))
 
-    # --- Traza ECG ---
-    fig.add_trace(go.Scatter(
-        x=t_arr,
-        y=valid_sig,
-        mode="lines",
-        name="ECG",
-        line=dict(color="#d1d5db", width=1.1),
-        hovertemplate="t=%{x:.3f} s  amp=%{y:.4f}<extra></extra>",
-        showlegend=False,
-    ))
+    # ══════════════════════════════════════════════════════════════════════
+    # MULTICLASS MODE — background regions + flat gray ECG line
+    # ══════════════════════════════════════════════════════════════════════
+    else:
+        if len(pdf) > 0 and pred_col in pdf.columns:
+            beat_times  = pdf[time_col].tolist()
+            pred_labels = pdf[pred_col].tolist()
 
-    # --- Marcadores de error: real ≠ pred ---
-    if len(pdf) > 0 and real_col in pdf.columns and pred_col in pdf.columns:
-        err_df = pdf.loc[
-            (pdf[real_col] != pdf[pred_col]) &
-            (pdf[time_col] >= start_offset) &
-            (pdf[time_col] <= t_end)
-        ].copy()
-        if not err_df.empty:
-            has_btype = beat_type_col in err_df.columns
+            if len(beat_times) >= 2:
+                rr_last    = beat_times[-1] - beat_times[-2]
+                next_times = beat_times[1:] + [beat_times[-1] + rr_last]
+            else:
+                next_times = [beat_times[0] + 1.0]
 
-            err_hover = []
-            for _, row in err_df.iterrows():
-                bt = str(row[beat_type_col]) if has_btype else "—"
-                txt = (
+            # Group consecutive same-label abnormal runs → background shapes
+            runs: list[tuple[float, float, str]] = []
+            run_start = beat_times[0]
+            run_label = pred_labels[0]
+            for i in range(1, len(beat_times)):
+                if pred_labels[i] != run_label:
+                    if run_label != _NORMAL_LABEL:
+                        runs.append((run_start, next_times[i - 1], run_label))
+                    run_start = beat_times[i]
+                    run_label = pred_labels[i]
+            if run_label != _NORMAL_LABEL:
+                runs.append((run_start, next_times[-1], run_label))
+
+            for r_start, r_end, r_label in runs:
+                rs = max(r_start, start_offset)
+                re = min(r_end, t_end)
+                if re <= rs:
+                    continue
+                fig.add_shape(
+                    type="rect",
+                    x0=rs, x1=re, y0=0, y1=1, yref="paper",
+                    fillcolor=_REGION_COLORS.get(r_label, _REGION_DEFAULT),
+                    line=dict(color=_REGION_BORDER.get(r_label, _REGION_DEFAULT_BORDER), width=1),
+                    layer="below",
+                )
+
+        # ECG line (flat gray)
+        fig.add_trace(go.Scatter(
+            x=t_arr, y=valid_sig,
+            mode="lines", name="ECG",
+            line=dict(color="#d1d5db", width=1.1),
+            hovertemplate="t=%{x:.3f} s  amp=%{y:.4f}<extra></extra>",
+            showlegend=False,
+        ))
+
+        # Error markers (multiclass: direct label comparison)
+        if len(pdf) > 0 and real_col in pdf.columns and pred_col in pdf.columns:
+            err_df = pdf.loc[
+                (pdf[real_col] != pdf[pred_col]) &
+                (pdf[time_col] >= start_offset) &
+                (pdf[time_col] <= t_end)
+            ].copy()
+            if not err_df.empty:
+                has_btype = beat_type_col in err_df.columns
+                err_hover = [
                     f"t = {row[time_col]:.3f} s<br>"
                     f"real: <b>{row[real_col]}</b><br>"
                     f"predicho: <b>{row[pred_col]}</b><br>"
-                    f"beat_type: {bt}<br>"
-                    f"correcto: False"
-                )
-                err_hover.append(txt)
+                    + (f"beat_type: {row[beat_type_col]}" if has_btype else "")
+                    for _, row in err_df.iterrows()
+                ]
+                fig.add_trace(go.Scatter(
+                    x=err_df[time_col].tolist(),
+                    y=[marker_y] * len(err_df),
+                    mode="markers",
+                    marker=dict(symbol="x", size=9,
+                                color="#f87171",
+                                line=dict(color="#b91c1c", width=1.5)),
+                    name="Error (real ≠ pred)",
+                    showlegend=True,
+                    text=err_hover,
+                    hovertemplate="%{text}<extra></extra>",
+                ))
 
-            fig.add_trace(go.Scatter(
-                x=err_df[time_col].tolist(),
-                y=[marker_y] * len(err_df),
-                mode="markers",
-                marker=dict(
-                    symbol="x",
-                    size=9,
-                    color="#f87171",
-                    line=dict(color="#b91c1c", width=1.5),
-                ),
-                name="Error (real ≠ pred)",
-                showlegend=True,
-                text=err_hover,
-                hovertemplate="%{text}<extra></extra>",
-            ))
+        # Legend entries for anomalous rhythm labels present
+        if len(pdf) > 0 and pred_col in pdf.columns:
+            for lbl in sorted(
+                lbl for lbl in pdf[pred_col].dropna().unique()
+                if lbl != _NORMAL_LABEL
+            ):
+                fig.add_trace(go.Scatter(
+                    x=[None], y=[None], mode="markers",
+                    marker=dict(size=12,
+                                color=_RHYTHM_COLORS.get(lbl, "#5d6c8c"),
+                                symbol="square", opacity=0.75),
+                    name=lbl, showlegend=True,
+                ))
 
-    # --- Entradas de leyenda para ritmos anómalos presentes ---
-    if len(pdf) > 0 and pred_col in pdf.columns:
-        anomalous = sorted(
-            lbl for lbl in pdf[pred_col].dropna().unique()
-            if lbl != _NORMAL_LABEL
-        )
-        for lbl in anomalous:
-            fig.add_trace(go.Scatter(
-                x=[None], y=[None],
-                mode="markers",
-                marker=dict(
-                    size=12,
-                    color=_RHYTHM_COLORS.get(lbl, "#5d6c8c"),
-                    symbol="square",
-                    opacity=0.75,
-                ),
-                name=lbl,
-                showlegend=True,
-            ))
-
+    # ── Layout ────────────────────────────────────────────────────────────
     apply_dark_layout(
         fig,
         title=dict(text=title, font=dict(size=12, color="#c8d2e5")),

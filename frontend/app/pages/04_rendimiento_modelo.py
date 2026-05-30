@@ -1,7 +1,8 @@
 """Página 04 — Rendimiento del modelo.
 
-Comparación de clasificadores sobre el conjunto de test (GroupKFold por case_id).
-Métrica principal: F1-macro.
+Dos secciones separadas:
+1. Modelo final oficial: Linear SVC, dataset completo, métricas definitivas.
+2. Benchmark exploratorio de candidatos: 5 modelos, 150 casos — solo para selección.
 """
 
 import json
@@ -12,114 +13,82 @@ import streamlit as st
 from components.badges import badge
 from components.cards  import callout, card_header, kv_table, metric_card, section_title
 from components.charts import fit_time_bar, model_metrics_bar
-from components.layout import page_header
-from components.tables import model_comparison_table
-from utils.loaders     import load_model_comparison, load_model_metadata
+from components.layout import page_header, page_footer
+from utils.loaders     import (
+    load_model_final_official,
+    load_model_metadata,
+    load_model_comparison_history,
+)
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
-meta   = load_model_metadata()
-df_raw = load_model_comparison()
+meta      = load_model_metadata()
+df_final  = load_model_final_official()
+df_hist   = load_model_comparison_history()
 
-_winner_id  = meta.get("winner_model", "") if meta else ""
-_f1_meta    = meta.get("winner_test_f1_macro") if meta else None
 page_header(
     "Rendimiento del modelo",
-    "Comparación de clasificadores entrenados para la detección multiclase "
-    "de ritmos intraoperatorios.",
+    "Modelo final oficial (Linear SVC · dataset completo) y benchmark exploratorio "
+    "de candidatos para detección binaria de ritmos intraoperatorios.",
     badge_html=badge("Evaluación final", "info"),
 )
 
 # ── Early exit ────────────────────────────────────────────────────────────────
-if df_raw is None:
+if df_final is None or df_final.empty:
     callout(
         "err",
         "Datos no disponibles",
-        "No se encontró <code>reports/tables/model_comparison.csv</code>. "
+        "No se encontró <code>reports/tables/tabular_model_final_official.csv</code>. "
         "Ejecuta el pipeline para generarlo.",
     )
     st.stop()
 
-# ── Column detection helpers ──────────────────────────────────────────────────
+# ── Parse final model row ─────────────────────────────────────────────────────
+_row        = df_final.iloc[0]
+winner_id   = str(_row.get("model", "linear_svc"))
+winner_nice = winner_id.replace("_", " ").title()
 
-def _find(df: pd.DataFrame, candidates: list[str]) -> str | None:
-    """Return the first matching column name from candidates list."""
-    for c in candidates:
-        if c in df.columns:
-            return c
-    # Fuzzy: any column whose name contains the candidate substring
-    for c in candidates:
-        matches = [col for col in df.columns if c in col.lower()]
-        if matches:
-            return matches[0]
-    return None
-
-
-COL_MODEL  = _find(df_raw, ["model"])
-COL_STATUS = _find(df_raw, ["status"])
-COL_F1     = _find(df_raw, ["test_f1_macro",        "f1_macro",     "f1"])
-COL_PREC   = _find(df_raw, ["test_precision_macro",  "precision_macro", "precision"])
-COL_REC    = _find(df_raw, ["test_recall_macro",     "recall_macro", "recall"])
-COL_ACC    = _find(df_raw, ["test_accuracy",         "accuracy"])
-COL_CV     = _find(df_raw, ["cv_f1_macro",           "cv_f1"])
-COL_TIME   = _find(df_raw, ["fit_time_seconds",      "fit_time",     "training_time", "elapsed"])
-COL_PARAMS = _find(df_raw, ["best_params",           "params",       "best_hyperparameters"])
-COL_ERROR  = _find(df_raw, ["error_message",         "error"])
-
-# ── Split ok / failed ─────────────────────────────────────────────────────────
-if COL_STATUS:
-    df_ok   = df_raw[df_raw[COL_STATUS].astype(str).str.lower() == "ok"].copy()
-    df_fail = df_raw[df_raw[COL_STATUS].astype(str).str.lower() != "ok"].copy()
-else:
-    df_ok   = df_raw.copy()
-    df_fail = pd.DataFrame()
-
-if COL_F1 and not df_ok.empty:
-    df_ok = df_ok.sort_values(COL_F1, ascending=False).reset_index(drop=True)
-
-# ── Identify winner ───────────────────────────────────────────────────────────
-_has_ok = not df_ok.empty and COL_MODEL
-
-winner_row      = df_ok.iloc[0]       if _has_ok else None
-winner_id       = str(winner_row[COL_MODEL]) if winner_row is not None else ""
-winner_nice     = winner_id.replace("_", " ").title()
-
-def _val(row, col, fmt=None, fallback="—"):
-    """Safely get a formatted value from a Series row."""
-    if row is None or col is None or col not in row.index:
+def _get(col: str, fmt: str | None = None, fallback: str = "—") -> str:
+    if col not in _row.index:
         return fallback
-    v = row[col]
+    v = _row[col]
     if pd.isna(v):
         return fallback
-    if fmt:
-        return format(v, fmt)
-    return v
+    return format(float(v), fmt) if fmt else str(v)
 
 def _fmt_model(name: str) -> str:
     return str(name).replace("_", " ").title()
 
+def _fmt_param_value(v) -> str:
+    try:
+        if isinstance(v, bool):
+            return str(v)
+        if isinstance(v, float):
+            return f"{v:.4g}"
+        if isinstance(v, int):
+            return str(v)
+    except Exception:
+        pass
+    return str(v)
+
+
 def _fmt_params(raw) -> str:
-    """Parse best_params JSON string into a readable single line."""
     if pd.isna(raw) or raw == "":
         return "No disponible"
     try:
         params = json.loads(str(raw))
-        cleaned = {
-            k.replace("clf__", "").replace("__", "_"): v
-            for k, v in params.items()
-        }
-        return " · ".join(f"{k} = {v}" for k, v in cleaned.items())
+        cleaned = {k.replace("clf__", "").replace("__", "_"): v for k, v in params.items()}
+        return " · ".join(f"{k} = {_fmt_param_value(v)}" for k, v in cleaned.items())
     except Exception:
         s = str(raw)
         return s[:120] + "…" if len(s) > 120 else s
 
-
-# ── Lookup: model-specific visual chips ──────────────────────────────────────
 _MODEL_CHIPS: dict[str, list[tuple[str, str]]] = {
     "linear_svc":    [("lineal", "info"), ("L2 hinge", "muted"), ("balanced", "ok")],
     "random_forest": [("ensemble", "info"), ("bagging", "muted"), ("balanced", "ok")],
-    "xgboost":       [("boosting", "info"), ("tree-based", "muted"), ("grad. descent", "muted")],
+    "xgboost":       [("boosting", "info"), ("tree-based", "muted")],
     "mlp":           [("neural net", "info"), ("relu", "muted"), ("adam", "muted")],
     "decision_tree": [("árbol", "info"), ("entropy", "muted")],
+    "logreg":        [("lineal", "info"), ("L-BFGS", "muted"), ("balanced", "ok")],
 }
 
 
@@ -128,38 +97,42 @@ _MODEL_CHIPS: dict[str, list[tuple[str, str]]] = {
 # ═══════════════════════════════════════════════════════════════════════════════
 callout(
     "info",
-    "Metodología de evaluación",
-    "Se compararon <b>"
-    + str(len(df_ok))
-    + " modelos</b> clásicos de clasificación multiclase. "
-    "La métrica principal es <b>F1-macro</b>: promedia el F1 de cada clase con "
-    "peso uniforme, penalizando al modelo cuando falla en clases minoritarias "
-    "(especialmente relevante aquí, donde la clase NSR concentra ~65% de las ventanas). "
-    "El split se realizó por <code>case_id</code> (GroupKFold, 5 folds) para garantizar "
-    "que ventanas del mismo paciente nunca aparezcan simultáneamente en train y test. "
-    "Estos resultados son <b>académicos</b> — no para uso clínico.",
+    "Metodología de evaluación — dos componentes",
+    "Esta página presenta <b>dos resultados separados</b>: "
+    "(1) el <b>modelo final oficial</b> — Linear SVC entrenado con el dataset completo "
+    "(639 460 registros, 482 casos) — y "
+    "(2) un <b>benchmark exploratorio</b> con 5 candidatos sobre 150 casos "
+    "(<code>--max-cases 150 --n-iter 5 --n-splits 3</code>). "
+    "El benchmark exploratorio <b>no representa métricas finales</b>; "
+    "fue una corrida rápida de selección de candidatos. "
+    "La tarea es <b>binaria</b>: normal (<code>rhythm_label == N</code>) "
+    "vs anormal (<code>rhythm_label != N</code>). "
+    "Métrica principal: <b>F1-macro</b> — promedia F1 de ambas clases con peso uniforme. "
+    "Resultados <b>académicos</b> — no para uso clínico.",
 )
 
-st.markdown("<div style='margin-top:20px'></div>", unsafe_allow_html=True)
+st.markdown("<div style='margin-top:24px'></div>", unsafe_allow_html=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SECCIÓN 2 — Modelo ganador + KPIs
+# SECCIÓN 2 — Modelo final oficial
 # ═══════════════════════════════════════════════════════════════════════════════
-section_title("Modelo seleccionado")
+section_title("Modelo final oficial")
 
 col_win, col_kpis = st.columns([1.35, 1])
 
-# ── Winner card ──────────────────────────────────────────────────────────────
 with col_win:
     with st.container(border=True):
         card_header(
-            "Modelo ganador",
-            "mejor F1-macro en test",
-            right_html=badge("winner", "winner"),
+            "Modelo desplegado",
+            "corrida definitiva · 639 460 registros · 482 casos",
+            right_html=(
+                badge("winner", "winner") + "&nbsp;" +
+                badge("full dataset", "ok") + "&nbsp;" +
+                badge("binario", "info")
+            ),
         )
 
-        # Model name + chips
         chips = _MODEL_CHIPS.get(winner_id, [])
         chips_html = " ".join(badge(t, k) for t, k in chips)
         st.markdown(
@@ -176,309 +149,266 @@ with col_win:
             unsafe_allow_html=True,
         )
 
-        # Key-value metrics
-        kv_rows = []
-        if COL_F1:
-            kv_rows.append(("F1-macro (test)",
-                            f'<b style="color:var(--teal)">{_val(winner_row, COL_F1, ".3f")}</b>'))
-        if COL_PREC:
-            kv_rows.append(("Precision (macro)", _val(winner_row, COL_PREC, ".3f")))
-        if COL_REC:
-            kv_rows.append(("Recall (macro)",    _val(winner_row, COL_REC, ".3f")))
-        if COL_ACC:
-            kv_rows.append(("Accuracy",           _val(winner_row, COL_ACC, ".3f")))
-        if COL_CV:
-            kv_rows.append(("CV F1-macro (mean)", _val(winner_row, COL_CV, ".3f")))
-        if COL_TIME:
-            t = winner_row[COL_TIME] if winner_row is not None and COL_TIME else None
-            if t is not None and not pd.isna(t):
-                kv_rows.append(("Tiempo entreno",
-                                f"{t:.0f} s ({t/60:.1f} min)" if t < 3600 else f"{t/3600:.1f} h"))
+        kv_table([
+            ("F1-macro (test)",
+             f'<b style="color:var(--teal)">{_get("test_f1_macro", ".3f")}</b>'),
+            ("Balanced accuracy",  _get("test_balanced_accuracy", ".3f")),
+            ("Accuracy",           _get("test_accuracy",          ".3f")),
+            ("Precision (macro)",  _get("test_precision_macro",   ".3f")),
+            ("Recall (macro)",     _get("test_recall_macro",      ".3f")),
+            ("Tiempo entreno",     f"{float(_row['fit_seconds']):.0f} s "
+                                   f"({float(_row['fit_seconds'])/60:.1f} min)"
+                                   if "fit_seconds" in _row.index and not pd.isna(_row["fit_seconds"])
+                                   else "—"),
+        ])
 
-        kv_table(kv_rows)
-
-        # Hyperparameters
-        if COL_PARAMS and winner_row is not None:
-            params_str = _fmt_params(winner_row[COL_PARAMS])
+        # Hyperparameters from metadata
+        if meta and "best_params" in meta:
+            params_str = _fmt_params(meta["best_params"])
             st.markdown("<div style='margin-top:12px'></div>", unsafe_allow_html=True)
             st.caption("Mejores hiperparámetros:")
             st.code(params_str, language=None)
 
-# ── KPI metrics ──────────────────────────────────────────────────────────────
 with col_kpis:
     r1, r2 = st.columns(2)
     r3, r4 = st.columns(2)
     r5, r6 = st.columns(2)
 
     with r1:
-        metric_card("Mejor modelo", winner_nice, accent="teal")
+        metric_card("Modelo", winner_nice, accent="teal")
     with r2:
-        metric_card(
-            "F1-macro test",
-            _val(winner_row, COL_F1, ".3f"),
-            helper=f"CV: {_val(winner_row, COL_CV, '.3f')}",
-            accent="teal",
-            helper_kind="muted",
-        )
+        metric_card("F1-macro test", _get("test_f1_macro", ".3f"), accent="teal")
     with r3:
-        metric_card(
-            "Accuracy test",
-            _val(winner_row, COL_ACC, ".3f"),
-            accent="blue",
-        )
+        metric_card("Balanced acc.", _get("test_balanced_accuracy", ".3f"), accent="blue")
     with r4:
-        metric_card(
-            "Precision macro",
-            _val(winner_row, COL_PREC, ".3f"),
-            accent="blue",
-        )
+        metric_card("Accuracy test", _get("test_accuracy", ".3f"), accent="blue")
     with r5:
-        metric_card(
-            "Modelos comparados",
-            str(len(df_raw)),
-            helper=f"{len(df_ok)} exitosos · {len(df_fail)} fallidos",
-            accent="warn",
-            helper_kind="muted",
-        )
+        metric_card("Precision macro", _get("test_precision_macro", ".3f"), accent="warn")
     with r6:
-        t_winner = (
-            winner_row[COL_TIME]
-            if winner_row is not None and COL_TIME and not pd.isna(winner_row[COL_TIME])
+        t_fit = (
+            float(_row["fit_seconds"])
+            if "fit_seconds" in _row.index and not pd.isna(_row["fit_seconds"])
             else None
         )
-        if t_winner:
-            time_display = f"{t_winner:.0f} s"
-        else:
-            time_display = "—"
-        metric_card("Tiempo entreno", time_display, accent="warn")
+        metric_card("Tiempo entreno", f"{t_fit:.0f} s" if t_fit else "—", accent="warn")
+
+
+st.markdown("<div style='margin-top:32px'></div>", unsafe_allow_html=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SECCIÓN 3 — Gráficos comparativos
+# SECCIÓN 3 — Benchmark exploratorio de candidatos
 # ═══════════════════════════════════════════════════════════════════════════════
-section_title("Comparación entre modelos")
+section_title("Benchmark exploratorio de candidatos")
 
-col_g1, col_g2 = st.columns([1.5, 1])
+callout(
+    "warn",
+    "Corrida exploratoria — no es el resultado final",
+    "Esta comparación se realizó con <b>150 casos</b> usando parámetros reducidos "
+    "(<code>--max-cases 150 --n-iter 5 --n-splits 3</code>). "
+    "Su único propósito fue <b>seleccionar candidatos</b> para la corrida definitiva, "
+    "<b>no evaluar el rendimiento real del modelo</b>. "
+    "MLP obtuvo el mayor F1-macro en esta corrida, pero "
+    "<b>no fue seleccionado como modelo final</b> porque: "
+    "(a) la corrida fue exploratoria con pocos datos, "
+    "(b) presentó advertencias de convergencia, y "
+    "(c) no ofrece interpretabilidad directa. "
+    "El <b>modelo final oficial es Linear SVC</b> entrenado con el dataset completo.",
+)
 
-# ── Grouped metrics bar ────────────────────────────────────────────────────────
-with col_g1:
-    with st.container(border=True):
-        card_header("Métricas por modelo", "test set · F1 · Precisión · Recall · Accuracy")
+st.markdown("<div style='margin-top:12px'></div>", unsafe_allow_html=True)
 
-        # Build metrics dict from available columns
-        model_labels = [_fmt_model(m) for m in df_ok[COL_MODEL]] if COL_MODEL else []
-        winner_label_nice = winner_nice
+if df_hist is not None:
+    df_exp = (
+        df_hist[df_hist["run_type"] == "exploratory_150_cases"].copy()
+        if "run_type" in df_hist.columns else df_hist.copy()
+    )
+    if "test_f1_macro" in df_exp.columns:
+        df_exp = df_exp.sort_values("test_f1_macro", ascending=False).reset_index(drop=True)
 
-        metrics_dict: dict[str, list[float]] = {}
-        for col_key, display_name in [
-            (COL_F1,   "F1-macro"),
-            (COL_PREC, "Precision"),
-            (COL_REC,  "Recall"),
-            (COL_ACC,  "Accuracy"),
-        ]:
-            if col_key and not df_ok.empty:
-                metrics_dict[display_name] = df_ok[col_key].tolist()
+    exp_labels       = [_fmt_model(m) for m in df_exp["model"]] if not df_exp.empty else []
+    exp_winner_label = "Mlp"
 
-        if metrics_dict and model_labels:
-            fig_metrics = model_metrics_bar(
-                labels=model_labels,
-                metrics=metrics_dict,
-                winner_label=winner_label_nice,
-                height=310,
+    col_h1, col_h2 = st.columns([1.5, 1])
+
+    with col_h1:
+        with st.container(border=True):
+            card_header(
+                "Métricas por candidato",
+                "corrida exploratoria · 150 casos · F1 · Precisión · Recall · Accuracy",
             )
-            st.plotly_chart(
-                fig_metrics, use_container_width=True, config={"displayModeBar": False}
-            )
-            st.caption(
-                f"El modelo ganador ({winner_nice}) está destacado con fondo teal. "
-                "Todos los valores están en escala 0–1."
-            )
-        else:
-            st.warning("No hay métricas suficientes para graficar.")
+            metrics_exp: dict[str, list[float]] = {}
+            for col_key, display_name in [
+                ("test_f1_macro",        "F1-macro"),
+                ("test_precision_macro", "Precision"),
+                ("test_recall_macro",    "Recall"),
+                ("test_accuracy",        "Accuracy"),
+            ]:
+                if col_key in df_exp.columns and not df_exp.empty:
+                    metrics_exp[display_name] = df_exp[col_key].tolist()
 
-# ── Training time bar ─────────────────────────────────────────────────────────
-with col_g2:
-    with st.container(border=True):
-        card_header("Tiempo de entrenamiento", "segundos · menor es mejor")
-
-        if COL_TIME and not df_ok.empty and COL_MODEL:
-            time_labels = [_fmt_model(m) for m in df_ok[COL_MODEL]]
-            time_values = df_ok[COL_TIME].tolist()
-
-            fig_time = fit_time_bar(
-                labels=time_labels,
-                times=time_values,
-                winner_label=winner_label_nice,
-                height=310,
-            )
-            st.plotly_chart(
-                fig_time, use_container_width=True, config={"displayModeBar": False}
-            )
-
-            # Trade-off callout
-            if winner_row is not None and COL_TIME:
-                t_w = winner_row[COL_TIME]
-                t_max = df_ok[COL_TIME].max()
-                t_max_model = _fmt_model(
-                    df_ok.loc[df_ok[COL_TIME].idxmax(), COL_MODEL]
+            if metrics_exp and exp_labels:
+                fig_exp = model_metrics_bar(
+                    labels=exp_labels,
+                    metrics=metrics_exp,
+                    winner_label=exp_winner_label,
+                    height=310,
                 )
-                if not pd.isna(t_w) and not pd.isna(t_max):
-                    callout(
-                        "info",
-                        "Trade-off velocidad / calidad",
-                        f"{winner_nice} entrena en <b>{t_w:.0f} s</b> y obtiene el mejor "
-                        f"F1-macro, frente a {t_max_model} que tarda "
-                        f"<b>{t_max:.0f} s ({t_max/60:.0f} min)</b>.",
-                    )
-        else:
-            st.warning("Columna de tiempo de entrenamiento no disponible.")
+                st.plotly_chart(fig_exp, use_container_width=True, config={"displayModeBar": False})
+                st.caption(
+                    "MLP destacado como mejor en esta corrida exploratoria (150 casos). "
+                    "No se seleccionó como modelo final — ver nota arriba. "
+                    "Modelo desplegado: Linear SVC (corrida con dataset completo)."
+                )
+            else:
+                st.warning("No hay métricas suficientes para graficar.")
 
+    with col_h2:
+        with st.container(border=True):
+            card_header("Tiempo de entrenamiento", "corrida exploratoria · segundos")
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# SECCIÓN 4 — Tabla comparativa completa
-# ═══════════════════════════════════════════════════════════════════════════════
-section_title("Tabla comparativa completa")
+            if "fit_seconds" in df_exp.columns and not df_exp.empty:
+                fig_time_exp = fit_time_bar(
+                    labels=exp_labels,
+                    times=df_exp["fit_seconds"].tolist(),
+                    winner_label=exp_winner_label,
+                    height=310,
+                )
+                st.plotly_chart(
+                    fig_time_exp, use_container_width=True, config={"displayModeBar": False}
+                )
+                callout(
+                    "info",
+                    "Trade-off velocidad / calidad",
+                    "MLP tiene el mayor F1 exploratorio pero también el mayor tiempo y no "
+                    "converge completamente. Linear SVC ofrece buen balance entre "
+                    "rendimiento, velocidad e interpretabilidad, decisivo para la "
+                    "corrida con el dataset completo.",
+                )
+            else:
+                st.info("Tiempo de entrenamiento no disponible.")
 
-with st.container(border=True):
-    card_header(
-        "Todos los modelos",
-        "ordenados por F1-macro · test set",
-        right_html=badge(f"{len(df_ok)} modelos exitosos", "ok"),
+    # ── Tabla histórica ──────────────────────────────────────────────────────
+    st.markdown("<div style='margin-top:20px'></div>", unsafe_allow_html=True)
+
+    with st.container(border=True):
+        card_header(
+            "Todos los candidatos — benchmark exploratorio",
+            "150 casos · --n-iter 5 · --n-splits 3 · no son métricas finales",
+            right_html=badge(f"{len(df_exp)} modelos", "muted"),
+        )
+
+        display_cols = [c for c in [
+            "model", "status",
+            "test_f1_macro", "test_precision_macro", "test_recall_macro",
+            "test_accuracy", "test_balanced_accuracy", "fit_seconds", "notes",
+        ] if c in df_exp.columns]
+
+        df_display = df_exp[display_cols].copy()
+        if "model" in df_display.columns:
+            df_display["model"] = df_display["model"].apply(_fmt_model)
+
+        col_rename = {
+            "model":                  "Modelo",
+            "status":                 "Estado",
+            "test_f1_macro":          "F1-macro",
+            "test_precision_macro":   "Precisión",
+            "test_recall_macro":      "Recall",
+            "test_accuracy":          "Accuracy",
+            "test_balanced_accuracy": "Balanced Acc.",
+            "fit_seconds":            "Tiempo (s)",
+            "notes":                  "Nota",
+        }
+        df_display = df_display.rename(columns=col_rename)
+
+        fmt_cols = {k: "{:.3f}" for k in
+                    ["F1-macro", "Precisión", "Recall", "Accuracy", "Balanced Acc."]
+                    if k in df_display.columns}
+        if "Tiempo (s)" in df_display.columns:
+            fmt_cols["Tiempo (s)"] = "{:.1f}"
+
+        st.dataframe(
+            df_display.style.format(fmt_cols, na_rep="—"),
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.caption(
+            "Corrida exploratoria con 150 casos. "
+            "MLP ganó en F1 pero no fue seleccionado — ver nota de la sección. "
+            "El modelo oficial es Linear SVC entrenado con el dataset completo."
+        )
+
+else:
+    callout(
+        "warn",
+        "Benchmark exploratorio no disponible",
+        "No se encontró <code>reports/tables/tabular_model_comparison_history.csv</code>.",
     )
-    model_comparison_table(df_ok, winner_model_id=winner_id)
-
-    st.caption(
-        "La fila destacada corresponde al modelo ganador seleccionado para la demo. "
-        "CV F1-macro es el promedio en validación cruzada (no en test set)."
-    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SECCIÓN 5 — Hiperparámetros (expander)
+# SECCIÓN 4 — Estrategia de búsqueda (expander)
 # ═══════════════════════════════════════════════════════════════════════════════
-with st.expander("Mejores hiperparámetros por modelo", expanded=False):
-    if COL_PARAMS and COL_MODEL and not df_ok.empty:
-        for _, row in df_ok.iterrows():
-            model_name = _fmt_model(row[COL_MODEL])
-            is_winner  = str(row[COL_MODEL]) == winner_id
-
-            label_html = (
-                f'{model_name} &nbsp; {badge("winner", "winner")}'
-                if is_winner
-                else model_name
-            )
-            params_str = _fmt_params(row[COL_PARAMS])
-
-            st.markdown(
-                f"""<div style="display:grid;grid-template-columns:160px 1fr;
-                               gap:10px;align-items:start;
-                               padding:10px 14px;margin-bottom:6px;
-                               border:1px solid var(--line-1);border-radius:8px;
-                               background:var(--bg-1);">
-                      <div style="font-weight:600;color:var(--fg-0);font-size:13px">
-                        {label_html}
-                      </div>
-                      <code style="font-family:var(--mono);font-size:11.5px;
-                                   color:var(--fg-1);word-break:break-all">
-                        {params_str}
-                      </code>
-                    </div>""",
-                unsafe_allow_html=True,
-            )
-    else:
-        st.info("No se encontraron columnas de hiperparámetros en el CSV.")
-
-    # Strategy details from metadata
+with st.expander("Estrategia de búsqueda — modelo final", expanded=False):
     if meta:
-        st.markdown("<div style='margin-top:12px'></div>", unsafe_allow_html=True)
-        card_header("Estrategia de búsqueda", "metodología")
+        card_header("Corrida final · metodología", "dataset completo")
         kv_table([
-            ("Método",           "RandomizedSearchCV"),
-            ("Split",            "StratifiedGroupKFold · por case_id"),
-            ("Scoring",          "f1_macro"),
-            ("Train groups",     str(meta.get("n_train_groups", "—"))),
-            ("Test groups",      str(meta.get("n_test_groups",  "—"))),
-            ("Features",         str(meta.get("n_features", "—"))),
-            ("Tipo de datos",    "Tabular · anotaciones por latido + metadatos clínicos"),
-            ("Fecha entreno",    str(meta.get("training_datetime", meta.get("trained_at", "—")))[:19]),
+            ("Método",        "RandomizedSearchCV"),
+            ("Split",         "StratifiedGroupKFold · por case_id"),
+            ("Scoring",       "f1_macro"),
+            ("Train groups",  str(meta.get("n_train_groups", "—"))),
+            ("Test groups",   str(meta.get("n_test_groups",  "—"))),
+            ("Features orig.","73 (57 num + 16 cat)"),
+            ("Features OHE",  "162 tras One-Hot Encoding"),
+            ("Target",        "binario: normal (N) vs anormal (no N)"),
+            ("Fecha entreno", str(meta.get("training_datetime", meta.get("trained_at", "—")))[:19]),
         ])
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# SECCIÓN 6 — Modelos fallidos (si existen)
-# ═══════════════════════════════════════════════════════════════════════════════
-if not df_fail.empty:
-    with st.expander(
-        f"Modelos con error o no evaluados ({len(df_fail)})", expanded=False
-    ):
-        callout(
-            "warn",
-            "Modelos no evaluados",
-            "Los siguientes modelos no completaron la evaluación. "
-            "Se conservan en el informe por transparencia metodológica.",
-        )
-        for _, row in df_fail.iterrows():
-            model_name = _fmt_model(row.get(COL_MODEL, "—"))
-            status_val = str(row.get(COL_STATUS, "—"))
-            error_val  = str(row.get(COL_ERROR, ""))  if COL_ERROR else "—"
-            st.markdown(
-                f"""<div style="padding:10px 14px;margin-bottom:6px;
-                               border:1px solid rgba(248,113,113,.25);
-                               border-radius:8px;background:var(--err-bg);">
-                      <div style="font-weight:600;color:var(--err)">{model_name}
-                        &nbsp; {badge(status_val, "err")}
-                      </div>
-                      <div style="font-size:12px;color:var(--fg-2);margin-top:4px">
-                        {error_val if error_val and error_val != 'nan' else "Sin detalle disponible"}
-                      </div>
-                    </div>""",
-                unsafe_allow_html=True,
-            )
-else:
-    # All models succeeded — show a quiet confirmation
-    pass
+        if "best_params" in meta:
+            st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
+            st.caption("Mejores hiperparámetros (modelo final):")
+            st.code(_fmt_params(meta["best_params"]), language=None)
+    else:
+        st.info("Metadata no disponible.")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SECCIÓN 7 — Nota interpretativa
+# SECCIÓN 5 — Interpretación
 # ═══════════════════════════════════════════════════════════════════════════════
 section_title("Interpretación de resultados")
-
-# Build interpretation from real data
-f1_winner_str = _val(winner_row, COL_F1, ".3f")
-acc_winner_str = _val(winner_row, COL_ACC, ".3f")
-
-# Second best model
-second_str = ""
-if len(df_ok) > 1 and COL_MODEL and COL_F1:
-    second_row  = df_ok.iloc[1]
-    second_name = _fmt_model(second_row[COL_MODEL])
-    second_f1   = _val(second_row, COL_F1, ".3f")
-    second_str  = (
-        f" El segundo mejor modelo fue <b>{second_name}</b> con F1-macro = {second_f1}."
-    )
 
 with st.container(border=True):
     card_header("Conclusión de esta sección", "lectura cualitativa")
     st.markdown(
         f"""<div style="font-size:13.5px;color:var(--fg-1);line-height:1.75">
               <p>
-                El modelo <b style="color:var(--teal)">{winner_nice}</b> obtuvo el mejor
-                F1-macro en el conjunto de test: <b>{f1_winner_str}</b> con una accuracy de
-                <b>{acc_winner_str}</b>.{second_str}
+                El modelo final <b style="color:var(--teal)">Linear SVC</b> entrenado con el
+                dataset completo (639 460 registros, 482 casos) obtuvo
+                <b>F1-macro = {_get("test_f1_macro", ".3f")}</b>,
+                <b>balanced accuracy = {_get("test_balanced_accuracy", ".3f")}</b> y
+                <b>accuracy = {_get("test_accuracy", ".3f")}</b> en el conjunto de test.
+                Este es el <b>modelo oficial del proyecto</b>.
               </p>
               <p>
-                La <b>accuracy ({acc_winner_str})</b> puede resultar engañosamente alta en este
-                problema: dado el fuerte desbalance de clases (la clase dominante concentra la
-                mayoría de ventanas), un clasificador trivial que prediga siempre la clase más
-                frecuente también obtendría alta accuracy. Por eso el <b>F1-macro ({f1_winner_str})</b>
-                es la métrica principal — pondera por igual a todas las clases, incluyendo las
-                minoritarias clínicamente relevantes.
+                El benchmark exploratorio (150 casos) sirvió para comparar candidatos.
+                MLP obtuvo el mayor F1-macro en esa corrida rápida (0.718), pero
+                <b>no fue seleccionado</b> como modelo final por presentar advertencias
+                de convergencia, no ofrecer interpretabilidad directa y porque sus
+                métricas se obtuvieron con solo 150 casos — no con el dataset completo.
               </p>
               <p>
-                El valor de F1-macro obtenido indica que el modelo tiene dificultades con varias
-                clases minoritarias. Los detalles de rendimiento por clase se exploran en la
-                siguiente sección: <b>Evaluación por clase</b>.
+                La tarea es <b>binaria</b>: cada latido se clasifica como
+                <b>normal</b> (<code>rhythm_label == "N"</code>, ritmo sinusal) o
+                <b>anormal</b> (<code>rhythm_label != "N"</code>, cualquier arritmia).
+                Las etiquetas originales de ritmo de la VitalDB se usan únicamente para
+                construir esta variable binaria; el modelo no distingue subtipos de arritmia.
+              </p>
+              <p>
+                El <b>F1-macro ({_get("test_f1_macro", ".3f")})</b> es la métrica principal
+                porque evalúa ambas clases con peso uniforme. La accuracy
+                ({_get("test_accuracy", ".3f")}) puede ser engañosamente alta dado el
+                desbalance (NSR domina ~65% de los latidos).
+                Los detalles por clase se exploran en <b>Evaluación por clase</b>.
               </p>
             </div>""",
         unsafe_allow_html=True,
@@ -487,8 +417,9 @@ with st.container(border=True):
     callout(
         "warn",
         "Limitación metodológica",
-        "Estos resultados corresponden a un pipeline académico con búsqueda de hiperparámetros reducida "
-        "(<code>--n-iter 15 --max-cases 400 --top-features 30</code>). "
-        "Los valores de F1-macro podrían mejorar con más iteraciones, "
-        "re-balanceo de clases minoritarias (SMOTE) o features RR más granulares.",
+        "Estos resultados corresponden a un pipeline académico. "
+        "Los valores de F1-macro podrían mejorar con más iteraciones de búsqueda, "
+        "re-balanceo de clases (SMOTE) o features RR más granulares.",
     )
+
+page_footer()

@@ -3,7 +3,7 @@
   "task": "binary_normal_vs_abnormal",
   "normal_definition": "rhythm_label == N",
   "abnormal_definition": "rhythm_label != N",
-  "winner_test_f1_macro": 0.6150368874278482,
+  "winner_test_f1_macro": 0.5828033717102837,
   "target": "binary_label",
   "numeric_features": [
     "time_second",
@@ -82,20 +82,20 @@
     "cline1",
     "cline2"
   ],
-  "trained_at": "2026-05-30T00:26:52.949314",
-  "best_params": "{\"clf__C\": 0.0019517224641449498}",
+  "trained_at": "2026-05-30T00:06:12.217124",
+  "best_params": "{\"clf__C\": 0.9846738873614566}",
   "winner_metrics": {
-    "cv_f1_macro": 0.6273106865006167,
-    "cv_precision_macro": 0.6295227077247965,
-    "cv_recall_macro": 0.6354099793767536,
-    "cv_accuracy": 0.6353415183590088,
-    "cv_balanced_accuracy": 0.6354099793767536,
-    "cv_f1_weighted": 0.6396183980456058,
-    "test_f1_macro": 0.6150368874278482,
-    "test_precision_macro": 0.6146455445435355,
-    "test_recall_macro": 0.6155260787618688,
-    "test_accuracy": 0.6325393077500716,
-    "test_balanced_accuracy": 0.6155260787618688,
-    "test_f1_weighted": 0.6332421243232982
+    "cv_f1_macro": 0.62244224356419,
+    "cv_precision_macro": 0.6251018787469619,
+    "cv_recall_macro": 0.6310784145271475,
+    "cv_accuracy": 0.6297472137606793,
+    "cv_balanced_accuracy": 0.6310784145271475,
+    "cv_f1_weighted": 0.6342601592422721,
+    "test_f1_macro": 0.5828033717102837,
+    "test_precision_macro": 0.5823445771323825,
+    "test_recall_macro": 0.5841697832992306,
+    "test_accuracy": 0.5986235513613526,
+    "test_balanced_accuracy": 0.5841697832992306,
+    "test_f1_weighted": 0.6008216720531109
   }
 }

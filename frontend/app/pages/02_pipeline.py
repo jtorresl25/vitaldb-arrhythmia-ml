@@ -1,103 +1,243 @@
-"""Página 02 — Pipeline metodológico (Streamlit nativo)."""
+"""Página 02 — Pipeline metodológico · detección binaria normal/anormal."""
 
 import streamlit as st
 
 from components.badges import badge, badge_row
-from components.cards import callout, card_header, kv_table, section_title
-from components.layout import page_header
-from utils.loaders import load_model_metadata
+from components.cards  import callout, card_header, kv_table, section_title
+from components.layout import page_header, page_footer
+from utils.loaders     import load_model_metadata
 
+# ── Metadata (live cuando disponible, fallback a valores del pipeline) ─────────
+meta        = load_model_metadata()
+winner_raw  = meta.get("winner_model", "linear_svc")           if meta else "linear_svc"
+winner_nice = winner_raw.replace("_", " ").title()
+f1_val      = meta.get("winner_test_f1_macro", 0.615)          if meta else 0.615
+n_num       = len(meta.get("numeric_features",   []))          if meta else 57
+n_cat       = len(meta.get("categorical_features", []))        if meta else 16
+n_feat_orig = n_num + n_cat or 73
+f1_str      = f"{f1_val:.3f}"
+
+# ── Header ─────────────────────────────────────────────────────────────────────
 page_header(
-    "Pipeline metodológico",
-    "De señales ECG intraoperatorias a evaluación multiclase de ritmos cardíacos.",
+    "Pipeline metodológico — Detección binaria normal/anormal",
+    "Flujo reproducible desde anotaciones VitalDB y metadatos clínicos hasta un "
+    "modelo binario desplegable en Streamlit.",
     badge_html=badge("Metodología", "info"),
 )
 
 st.markdown(
     badge_row(
-        badge("VitalDB", "info"),
-        badge("ECG", "info"),
-        badge("Machine Learning", "info"),
-        badge("Demo académica · No uso clínico", "warn"),
+        badge("Binario", "ok"),
+        badge("Sin leakage", "info"),
+        badge("Group split", "info"),
+        badge("Linear SVC", "muted"),
+        badge("Streamlit ready", "teal"),
+        badge("Demo académica", "warn"),
     ),
     unsafe_allow_html=True,
 )
 
 st.write("")
 
-meta       = load_model_metadata()
-n_features = meta.get("n_features", 15) if meta else 15
-winner     = meta.get("winner_model", "Random Forest").replace("_", " ").title() if meta else "Random Forest"
-f1_str     = f"{meta.get('winner_test_f1_macro', 0):.3f}" if meta else "—"
+# ── Antes vs Ahora ─────────────────────────────────────────────────────────────
+section_title("Cambio metodológico importante")
 
-# ── Flujo general ─────────────────────────────────────────────────────────────
-section_title("Flujo completo del proyecto")
+col_before, col_arrow, col_after = st.columns([5, 1, 5])
+
+with col_before:
+    with st.container(border=True):
+        st.markdown(
+            f'<div style="margin-bottom:6px">{badge("Antes", "warn")}</div>'
+            f'<div style="font-size:13px;font-weight:600;color:var(--fg-0);">'
+            f'Clasificación multiclase de ritmos</div>',
+            unsafe_allow_html=True,
+        )
+        kv_table([
+            ("Clases", "N, AFIB/AFL, VT, SVTA, AVB…"),
+            ("Salida", "Tipo específico de arritmia"),
+            ("Problema", "Desbalance severo · clases raras sin detección"),
+            ("F1-macro", "Muy bajo en clases minoritarias"),
+        ])
+
+with col_arrow:
+    st.markdown(
+        '<div style="display:flex;align-items:center;justify-content:center;'
+        'height:100%;padding-top:36px;font-size:22px;color:var(--fg-3)">→</div>',
+        unsafe_allow_html=True,
+    )
+
+with col_after:
+    with st.container(border=True):
+        st.markdown(
+            f'<div style="margin-bottom:6px">{badge("Ahora", "ok")}</div>'
+            f'<div style="font-size:13px;font-weight:600;color:var(--fg-0);">'
+            f'Detección binaria normal/anormal</div>',
+            unsafe_allow_html=True,
+        )
+        kv_table([
+            ("Clases", "Normal · Anormal (2 clases)"),
+            ("Salida", "¿El registro es normal o anormal?"),
+            ("Ventaja", "Evaluación estable · métricas interpretables"),
+            ("F1-macro", f1_str),
+        ])
+
+callout(
+    "info",
+    "Por qué se reformuló",
+    "El enfoque multiclase tenía desempeño limitado y difícil de defender: clases como "
+    "AVB (F1 = 0.000) o SVTA (F1 = 0.027) no eran detectadas de forma confiable. "
+    "La reformulación binaria es más coherente con una <b>demo académica reproducible</b> "
+    "y permite una evaluación más estable con las features tabulares disponibles.",
+)
+
+st.write("")
+
+# ── Pipeline — pasos ──────────────────────────────────────────────────────────
+section_title("Pasos del pipeline")
 
 _STEPS = [
-    ("01", "Problema y datos",
-     "VitalDB Arrhythmia Database · anotaciones PhysioNet · ECG intraoperatorio",
-     "Señales ECG continuas de pacientes quirúrgicos con anotaciones de ritmo latido a latido. "
-     "La base contiene ~5 000 casos con distintos tipos de arritmia.",
-     "info"),
-    ("02", "Carga y exploración (EDA)",
-     "metadata.csv · Annotation_files · señales .npy a 500 Hz",
-     "Carga de metadatos clínicos (optype, altura, peso, laboratorios pre-op) y archivos de "
-     "anotaciones de ritmo. Exploración de distribución de clases, duración de casos y calidad de señal.",
-     "info"),
-    ("03", "Filtros de calidad y limpieza",
-     "bad_signal_quality · Noise excluido · ritmos válidos",
-     "Se aplican filtros: exclusión de latidos con bad_signal_quality=True, exclusión de "
-     "la clase 'Noise' y de rhythm_label vacío/NaN. Se conservan solo ritmos con soporte suficiente.",
-     "warn"),
-    ("04", "Feature engineering tabular",
-     f"RR intervals · metadatos clínicos · {n_features} features totales",
-     "Por cada latido se calculan: rr_prev, rr_next, hr_inst_from_rr_prev, position_in_case "
-     "(features de anotaciones) + 25 campos de metadata clínica (optype, bmi, preop_*, intraop_*). "
-     "beat_type se excluye del modelo — es descriptivo, no un predictor.",
-     "info"),
-    ("05", "Split sin leakage",
-     "GroupShuffleSplit por case_id · 80/20 train/test",
-     "El split se hace a nivel de caso quirúrgico (case_id) para evitar que latidos del mismo "
-     "paciente aparezcan en train y test a la vez. Garantiza generalización real.",
-     "info"),
-    ("06", "Entrenamiento y búsqueda de HP",
-     "RandomizedSearchCV · GroupKFold · 5 folds",
-     "Se comparan: Logistic Regression, Decision Tree, Random Forest, SVM (LinearSVC), MLP. "
-     "Búsqueda de hiperparámetros con RandomizedSearchCV y GroupKFold para mantener la "
-     "restricción de case_id dentro del CV.",
-     "info"),
-    ("07", "Evaluación en test set",
-     f"Métrica principal: F1-macro · Ganador: {winner} · F1={f1_str}",
-     "Evaluación sobre el hold-out de test. F1-macro penaliza el fallo en clases minoritarias "
-     "(p.ej. VT, SND). Se exportan: classification_report, confusion_matrix, feature_importance.",
-     "teal"),
-    ("08", "App Streamlit (esta demo)",
-     "Predicción sobre datos tabulares · sin retrain",
-     "La app carga el pipeline .joblib entrenado y permite evaluar casos VitalDB conocidos "
-     "o explorar resultados por clase, features y matriz de confusión.",
-     "muted"),
+    (
+        "01", "Datos de entrada", "teal",
+        "VitalDB · anotaciones por latido · metadata clínica",
+        [
+            ("Señal",      "ECG Lead II · 500 Hz · archivos .npy por caso"),
+            ("Anotaciones","Annotation_file_XXXX.csv · rhythm_label por latido"),
+            ("Metadata",   "~25 variables clínicas/quirúrgicas por caso"),
+            ("ECG crudo",  "Solo para visualización en la demo — no entra al modelo"),
+        ],
+    ),
+    (
+        "02", "Limpieza y filtros", "warn",
+        "bad_signal · Noise · NaN · leakage excluidos",
+        [
+            ("Excluir",   "bad_signal_quality == True"),
+            ("Excluir",   "rhythm_label == 'Noise'"),
+            ("Excluir",   "rhythm_label vacío / NaN"),
+            ("Excluir",   "beat_type — data leakage"),
+            ("Conservar", "rhythm_label solo para construir target"),
+        ],
+    ),
+    (
+        "03", "Construcción del target binario", "ok",
+        "normal (N) · anormal (≠ N)",
+        [
+            ("normal",   "rhythm_label == 'N'  →  392 623 registros"),
+            ("anormal",  "rhythm_label != 'N'  →  246 837 registros"),
+            ("Nota",     "Las clases originales se agrupan como 'anormal'"),
+            ("Objetivo", "Detectar si el registro es normal o anormal"),
+        ],
+    ),
+    (
+        "04", "Feature engineering tabular", "info",
+        f"RR intervals · metadata clínica · {n_feat_orig} vars → 162 tras OHE",
+        [
+            ("RR",        "rr_prev · rr_next · hr_inst_from_rr_prev"),
+            ("Posición",  "position_in_case (0 = inicio, 1 = fin)"),
+            ("Clínicas",  f"{n_num} numéricas + {n_cat} categóricas"),
+            ("OHE",       "162 variables transformadas"),
+        ],
+    ),
+    (
+        "05", "Split sin leakage", "info",
+        "GroupShuffleSplit · 80/20 por case_id · 482 casos",
+        [
+            ("Estrategia", "GroupShuffleSplit por case_id"),
+            ("Train",      "510 287 registros · 385 casos"),
+            ("Test",       "129 173 registros · 97 casos"),
+            ("Garantía",   "Ningún caso aparece en train y test a la vez"),
+        ],
+    ),
+    (
+        "06", "Benchmark exploratorio", "muted",
+        "5 candidatos · 150 casos · orientación de selección",
+        [
+            ("Modelos",   "LogReg · LinearSVC · DTree · RandomForest · MLP"),
+            ("Config",    "--max-cases 150 · --n-iter 5 · --n-splits 3"),
+            ("Propósito", "Comparar candidatos · no métricas finales"),
+            ("Resultado", "MLP mayor F1 exploratorio · no elegido como final"),
+        ],
+    ),
+    (
+        "07", "Modelo final oficial", "teal",
+        f"Linear SVC · dataset completo · F1-macro {f1_str}",
+        [
+            ("Modelo",    winner_nice),
+            ("Dataset",   "639 460 registros · 482 casos"),
+            ("F1-macro",  f1_str),
+            ("Bal. acc.", "0.616"),
+            ("Criterio",  "Desempeño · interpretabilidad · velocidad"),
+        ],
+    ),
+    (
+        "08", "Exportación y despliegue", "muted",
+        ".joblib · metadata JSON · artefactos → Streamlit Cloud",
+        [
+            ("Pipeline",    "tabular_best_model_pipeline.joblib"),
+            ("Metadata",    "tabular_best_model_metadata.json"),
+            ("Reportes",    "CSV con métricas · classification report"),
+            ("Artefactos",  "frontend/app/app_artifacts/ para Cloud"),
+        ],
+    ),
 ]
 
-for step_num, step_name, step_sub, step_desc, step_accent in _STEPS:
+for step_num, step_name, accent, step_sub, step_kv in _STEPS:
     with st.container(border=True):
-        col_n, col_c = st.columns([0.5, 9.5])
+        col_n, col_c = st.columns([0.45, 9.55])
         with col_n:
             st.markdown(
-                f'<div style="font-family:var(--mono);font-size:13px;font-weight:700;'
+                f'<div style="font-family:var(--mono);font-size:12px;font-weight:700;'
                 f'color:var(--fg-4);background:var(--bg-3);border-radius:5px;'
-                f'padding:4px 6px;text-align:center;margin-top:4px">{step_num}</div>',
+                f'padding:4px 6px;text-align:center;margin-top:6px">{step_num}</div>',
                 unsafe_allow_html=True,
             )
         with col_c:
-            st.markdown(
-                f'<div style="font-size:14px;font-weight:600;color:var(--fg-0);'
-                f'margin-bottom:2px">{step_name}</div>'
-                f'<div style="font-size:11px;font-family:var(--mono);color:var(--fg-3);'
-                f'margin-bottom:6px">{step_sub}</div>'
-                f'<div style="font-size:12.5px;color:var(--fg-2);line-height:1.55">'
-                f'{step_desc}</div>',
-                unsafe_allow_html=True,
-            )
+            col_title, col_detail = st.columns([1.6, 2])
+            with col_title:
+                st.markdown(
+                    f'<div style="font-size:13.5px;font-weight:600;color:var(--fg-0);'
+                    f'margin-bottom:3px">{step_name}</div>'
+                    f'<div style="font-size:10.5px;font-family:var(--mono);'
+                    f'color:var(--fg-3)">{step_sub}</div>',
+                    unsafe_allow_html=True,
+                )
+            with col_detail:
+                kv_table(step_kv)
+
+st.write("")
+
+# ── Qué entra y qué no entra ──────────────────────────────────────────────────
+section_title("Qué entra y qué no entra al modelo")
+
+col_in, col_out = st.columns(2)
+
+with col_in:
+    with st.container(border=True):
+        st.markdown(
+            f'<div style="margin-bottom:8px">{badge("✓  Entra al modelo", "ok")}</div>',
+            unsafe_allow_html=True,
+        )
+        kv_table([
+            ("RR intervals",       "rr_prev · rr_next · hr_inst_from_rr_prev"),
+            ("Temporal",           "time_second · position_in_case"),
+            ("Metadata clínica",   "bmi · preop_* · intraop_crystalloid…"),
+            ("Metadata quirúrgica","optype · opstart · opend · anestart…"),
+            ("Categóricas (OHE)",  "optype · iv1 · aline1 · cline1"),
+        ])
+
+with col_out:
+    with st.container(border=True):
+        st.markdown(
+            f'<div style="margin-bottom:8px">{badge("✗  No entra al modelo", "err")}</div>',
+            unsafe_allow_html=True,
+        )
+        kv_table([
+            ("rhythm_label",    "Es el target — leakage directo"),
+            ("beat_type",       "Descriptor del latido — leakage potencial"),
+            ("case_id",         "Solo para split; no es predictor"),
+            ("subjectid / dx",  "Alta cardinalidad / no disponible en demo"),
+            ("death_inhosp",    "Resultado tardío — no disponible al predecir"),
+            ("ECG crudo",       "No alimenta el modelo final directamente"),
+        ])
 
 st.write("")
 
@@ -108,79 +248,125 @@ col_a, col_b = st.columns(2)
 
 with col_a:
     with st.container(border=True):
-        card_header("¿Por qué features tabulares?", "enfoque metodológico")
-        st.markdown(
-            """Las señales ECG crudas requieren modelos 1D-CNN o transformers para aprendizaje
-            de representaciones, lo que aumenta drásticamente el costo computacional y de datos.
-
-            El enfoque tabular extrae **RR intervals + metadatos clínicos** (indicadores de riesgo
-            ya validados en anestesiología) y los combina en un vector de features interpretable.
-            Esto permite usar clasificadores clásicos de scikit-learn con tiempos de entrenamiento
-            de segundos y explicabilidad directa por importancia de feature.""",
-            unsafe_allow_html=False,
-        )
+        card_header("¿Por qué features tabulares?", "no CNN ni transformers")
         kv_table([
-            ("Ventaja", "Interpretable, rápido, reproducible"),
+            ("Ventaja",    "Interpretable · rápido · reproducible con scikit-learn"),
             ("Limitación", "No captura morfología de la onda ECG"),
-            ("Alternativa futura", "1D-CNN sobre ventanas de señal"),
+            ("Alternativa","1D-CNN sobre fragmentos de señal — trabajo futuro"),
         ])
+        callout(
+            "info",
+            "",
+            "El enfoque extrae <b>RR intervals + metadatos clínicos</b> en un vector "
+            "interpretable, evitando el alto costo computacional de modelos sobre señal cruda.",
+        )
 
 with col_b:
     with st.container(border=True):
-        card_header("¿Por qué F1-macro como métrica?", "evaluación multiclase desbalanceada")
-        st.markdown(
-            """El dataset está fuertemente desbalanceado: la clase Normal (N) tiene órdenes de
-            magnitud más ejemplos que arritmias raras como VT o SND.
-
-            **Accuracy** sería engañosa: un modelo que siempre predice N alcanzaría alta accuracy
-            sin detectar ninguna arritmia real. **F1-macro** promedia el F1 de cada clase por igual,
-            penalizando severamente el fallo en clases minoritarias.""",
-            unsafe_allow_html=False,
-        )
+        card_header("¿Por qué F1-macro?", "dataset desbalanceado: ~61 % normal")
         kv_table([
-            ("Accuracy del ganador", f"{meta.get('winner_metrics', {}).get('test_accuracy', 0):.3f}" if meta else "—"),
-            ("F1-macro del ganador", f1_str),
-            ("Diferencia", "Accuracy engañosa para clases raras"),
+            ("Accuracy",    "Engañosa: un modelo que siempre predice Normal alcanza ~61 %"),
+            ("F1-macro",    f"Penaliza el fallo en ambas clases — valor: {f1_str}"),
+            ("Bal. acc.",   "0.616 · independiente del desbalance"),
         ])
+        callout(
+            "warn",
+            "",
+            "Si el modelo siempre prediciese <b>Normal</b>, accuracy sería ~61 % "
+            "pero <b>nunca detectaría un caso anormal</b>. F1-macro y balanced accuracy "
+            "evitan que eso se oculte.",
+        )
 
 st.write("")
 
-# ── Clases de ritmo ───────────────────────────────────────────────────────────
-section_title("Clases de ritmo cardíaco")
+# ── Artefactos generados ──────────────────────────────────────────────────────
+section_title("Artefactos generados por el pipeline")
 
-_CLASES = [
-    ("N", "Normal sinus rhythm", "Ritmo sinusal normal — clase mayoritaria (~60-70%)", "muted"),
-    ("AFIB/AFL", "Atrial fibrillation / flutter", "Fibrilación o flutter auricular", "info"),
-    ("Patterned Ventricular Ectopy", "PVE", "Ectopia ventricular con patrón definido", "warn"),
-    ("Patterned Atrial Ectopy", "PAE", "Ectopia auricular con patrón definido", "warn"),
-    ("SVTA", "Supraventricular tachyarrhythmia", "Taquiarritmia supraventricular", "warn"),
-    ("VT", "Ventricular tachycardia", "Taquicardia ventricular — clase minoritaria crítica", "err"),
-    ("SND", "Sinus node dysfunction", "Disfunción del nodo sinusal", "err"),
-    ("AVB", "AV block", "Bloqueo auriculo-ventricular", "err"),
-    ("WAP/MAT", "Wandering pacemaker / MAT", "Marcapasos errante o taquicardia auricular multifocal", "muted"),
-    ("Unclassifiable", "—", "Latidos que no encajan en categorías anteriores", "muted"),
+_ARTIFACTS = [
+    ("models/",
+     "tabular_best_model_pipeline.joblib",
+     "Pipeline sklearn final (preprocesador + LinearSVC)",
+     "teal"),
+    ("models/",
+     "tabular_best_model_metadata.json",
+     "Metadata: features, métricas, hiperparámetros",
+     "teal"),
+    ("reports/tables/",
+     "tabular_model_comparison_test.csv",
+     "Métricas de la corrida final",
+     "info"),
+    ("reports/tables/",
+     "tabular_model_comparison_history.csv",
+     "Benchmark exploratorio de candidatos",
+     "info"),
+    ("reports/tables/",
+     "tabular_best_model_classification_report.csv",
+     "Reporte normal / anormal",
+     "info"),
+    ("reports/tables/",
+     "tabular_binary_metrics.csv",
+     "Métricas binarias específicas",
+     "info"),
+    ("reports/tables/",
+     "confusion_matrix.csv",
+     "Matriz normal / anormal (long format)",
+     "muted"),
+    ("frontend/app/",
+     "app_artifacts/",
+     "Carpeta versionable para Streamlit Cloud — artefactos pequeños copiados del pipeline",
+     "ok"),
 ]
 
-_cls_cols = st.columns(2)
-for i, (code, full, desc, accent) in enumerate(_CLASES):
-    with _cls_cols[i % 2]:
+_art_cols = st.columns(2)
+for i, (folder, fname, desc, accent) in enumerate(_ARTIFACTS):
+    with _art_cols[i % 2]:
         st.markdown(
-            f'<div style="display:flex;gap:8px;align-items:flex-start;'
-            f'padding:7px 0;border-bottom:1px dashed var(--line-1)">'
-            f'<div style="min-width:28px;margin-top:1px">{badge(code, accent)}</div>'
-            f'<div>'
-            f'<div style="font-size:12px;color:var(--fg-1);font-weight:500">{full}</div>'
-            f'<div style="font-size:11px;color:var(--fg-3)">{desc}</div>'
+            f'<div style="display:flex;gap:8px;align-items:flex-start;padding:7px 0;'
+            f'border-bottom:1px dashed var(--line-1)">'
+            f'<div style="margin-top:2px">{badge("↓", accent)}</div>'
+            f'<div style="min-width:0">'
+            f'<div style="font-family:var(--mono);font-size:10px;color:var(--fg-3)">'
+            f'{folder}<b style="color:var(--fg-1)">{fname}</b></div>'
+            f'<div style="font-size:11px;color:var(--fg-2);margin-top:2px">{desc}</div>'
             f'</div></div>',
             unsafe_allow_html=True,
         )
 
 st.write("")
 
+# ── Métricas finales del modelo ───────────────────────────────────────────────
+section_title("Métricas finales — modelo oficial")
+
+_met_cols = st.columns(5)
+_METRICS = [
+    ("F1-macro",      f1_str,  "teal"),
+    ("Balanced acc.", "0.616", "teal"),
+    ("Accuracy",      "0.633", "blue"),
+    ("Precision",     "0.615", "blue"),
+    ("Recall",        "0.616", "blue"),
+]
+for _col, (name, val, accent) in zip(_met_cols, _METRICS):
+    with _col:
+        st.markdown(
+            f'<div style="border:1px solid var(--line-1);border-radius:8px;'
+            f'padding:10px 12px;text-align:center;">'
+            f'<div style="font-family:var(--mono);font-size:11px;color:var(--fg-3);'
+            f'margin-bottom:4px">{name}</div>'
+            f'<div style="font-size:22px;font-weight:700;color:var(--{accent})">{val}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+st.write("")
+
+# ── Nota de transparencia ─────────────────────────────────────────────────────
 callout(
     "warn",
-    "Limitaciones del modelo",
-    "El modelo tabular no captura la morfología de la onda ECG — solo usa intervalos RR y "
-    "metadatos clínicos. Las clases raras (VT, SND, AVB) tienen recall muy bajo por escasez "
-    "de datos de entrenamiento. <b>No usar para diagnóstico clínico real.</b>",
+    "Transparencia metodológica",
+    "<b>ECG crudo:</b> visible en la demo para contexto visual, pero no alimenta directamente "
+    "al modelo final — el modelo usa features tabulares (RR + metadata clínica). "
+    "<b>Importancia de features:</b> refleja asociaciones predictivas aprendidas, no causalidad médica. "
+    "<b>Uso clínico:</b> esta app es académica — no debe usarse para diagnóstico ni decisiones clínicas.",
 )
+
+page_footer()

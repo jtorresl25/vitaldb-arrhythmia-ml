@@ -1,0 +1,2 @@
+model,status,test_f1_macro,test_precision_macro,test_recall_macro,test_accuracy,test_balanced_accuracy,test_f1_weighted,fit_seconds,run_type,notes
+linear_svc,ok,0.615,0.615,0.616,0.633,0.616,0.633,1104.601,final_full_dataset,Modelo final oficial entrenado con todo el dataset
