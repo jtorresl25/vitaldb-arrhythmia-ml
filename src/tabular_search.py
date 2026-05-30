@@ -127,6 +127,11 @@ class _XGBClassifierSafe:
     def predict_proba(self, X):
         return self._xgb.predict_proba(X)
 
+    def __sklearn_tags__(self):
+        # Required by sklearn >= 1.6; delegate to BaseEstimator's default tags.
+        from sklearn.base import BaseEstimator as _BE
+        return _BE().__sklearn_tags__()
+
 
 # ---------------------------------------------------------------------------
 # Clasificación de features (numéricas / categóricas / leakage)

@@ -42,6 +42,66 @@ _CASE_PATTERN = re.compile(r"^case[_-]?(\d+)\.npy$", re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------
+# Label-decoding helper
+# ---------------------------------------------------------------------------
+def _resolve_label_classes(model) -> "np.ndarray | None":
+    """Return the string class labels needed to decode integer predictions.
+
+    Tries in order:
+      1. model pipeline last step .classes_  — if already strings, return them
+      2. Known keys in models/*.json metadata files
+      3. Sorted unique rhythm_label values from the parquet dataset (fallback)
+    Returns None if no mapping is found.
+    """
+    import json as _json
+
+    # 1. Model's own classes_ (last step of a Pipeline, or the model itself)
+    _clf = model
+    if hasattr(model, "steps"):
+        try:
+            _clf = model.steps[-1][1]
+        except Exception:
+            pass
+    if hasattr(_clf, "classes_"):
+        _c = np.asarray(_clf.classes_)
+        if _c.dtype.kind in ("U", "O", "S"):   # already strings
+            return _c
+
+    # 2. Known keys inside models/*.json
+    _CLASS_KEYS = (
+        "label_classes", "classes", "target_classes",
+        "class_names", "labels", "model_classes",
+    )
+    _META_PATHS = [
+        PROJECT_ROOT / "models" / "model_artifacts_metadata.json",
+        PROJECT_ROOT / "models" / "tabular_best_model_metadata.json",
+    ]
+    for _mp in _META_PATHS:
+        if not _mp.exists():
+            continue
+        try:
+            with open(_mp) as _f:
+                _meta = _json.load(_f)
+            for _key in _CLASS_KEYS:
+                if _key in _meta and isinstance(_meta[_key], list) and _meta[_key]:
+                    return np.array(_meta[_key])
+        except Exception:
+            pass
+
+    # 3. Sorted unique labels from the parquet (same order as LabelEncoder.fit)
+    if PARQUET_PATH.exists():
+        try:
+            _df = pd.read_parquet(PARQUET_PATH, columns=["rhythm_label"])
+            _classes = sorted(_df["rhythm_label"].dropna().unique().tolist())
+            if _classes:
+                return np.array(_classes)
+        except Exception:
+            pass
+
+    return None
+
+
+# ---------------------------------------------------------------------------
 # 1. extract_case_id_from_filename
 # ---------------------------------------------------------------------------
 def extract_case_id_from_filename(filename: str) -> int | None:
@@ -296,7 +356,18 @@ def predict_case_windows(
 ) -> np.ndarray:
     """Predicts rhythm_label for each beat row. Returns array of string labels."""
     cols = [c for c in feature_columns if c in feature_df.columns]
-    return model.predict(feature_df[cols])
+    preds = np.asarray(model.predict(feature_df[cols]))
+
+    # If the model was trained on label-encoded integers, decode back to strings
+    if len(preds) > 0 and preds.dtype.kind in ("i", "u", "f"):
+        classes = _resolve_label_classes(model)
+        if classes is not None:
+            try:
+                preds = np.array([classes[int(p)] for p in preds])
+            except (IndexError, ValueError):
+                pass
+
+    return preds
 
 
 # ---------------------------------------------------------------------------
@@ -311,11 +382,30 @@ def evaluate_case_predictions(
 
     y_true = np.asarray(y_true)
     y_pred = np.asarray(y_pred)
-    mask = pd.notna(y_true) & (y_true != "")
+
+    # Guard: if predictions are still numeric but ground truth is strings,
+    # label decoding failed — accuracy cannot be computed reliably.
+    if y_pred.dtype.kind in ("i", "u", "f") and y_true.dtype.kind in ("U", "O", "S"):
+        return {
+            "n_beats":        int(len(y_pred)),
+            "n_correct":      None,
+            "accuracy":       None,
+            "classes_present": [],
+            "error_table":    None,
+            "warning": (
+                "El modelo predijo etiquetas codificadas pero no se encontró "
+                "el mapeo de clases en metadata. No se puede calcular accuracy."
+            ),
+        }
+
+    # Safety: convert both to str before comparison
+    y_true = y_true.astype(str)
+    y_pred = y_pred.astype(str)
+    mask = ~np.isin(y_true, ["nan", "None", "none", ""])
     yt, yp = y_true[mask], y_pred[mask]
 
     if len(yt) == 0:
-        return {"n_beats": 0, "accuracy": None, "classes_present": [], "error_table": None}
+        return {"n_beats": 0, "n_correct": 0, "accuracy": None, "classes_present": [], "error_table": None}
 
     correct = (yt == yp)
     acc = float(accuracy_score(yt, yp))

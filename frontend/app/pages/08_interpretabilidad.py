@@ -236,15 +236,23 @@ if FEAT_COL is None or IMP_COL is None:
 df_imp[IMP_COL] = pd.to_numeric(df_imp[IMP_COL], errors="coerce")
 df_imp = df_imp.dropna(subset=[IMP_COL]).sort_values(IMP_COL, ascending=False).reset_index(drop=True)
 
+# _known_cat must be defined before any _strip_prefix call below
+_known_cat = meta.get("categorical_features", []) if meta else []
+
+if df_imp.empty:
+    callout(
+        "warn",
+        "Sin features con importancia válida",
+        f"El archivo de importancia fue encontrado pero no contiene filas con valores numéricos "
+        f"en la columna <code>{IMP_COL}</code>. Vuelve a ejecutar el benchmark.",
+    )
+    st.stop()
+
 n_features_csv   = len(df_imp)
 n_features_total = len(feature_cols) if has_cols else n_features_csv
-# Use stripped name for display; raw name kept in FEAT_COL
-top_feature      = _strip_prefix(str(df_imp.loc[0, FEAT_COL]), _known_cat if True else [])
+top_feature      = _strip_prefix(str(df_imp.loc[0, FEAT_COL]), _known_cat)
 top_importance   = float(df_imp.loc[0, IMP_COL])
 total_importance = float(df_imp[IMP_COL].sum())
-
-# Strip num__/cat__ prefixes; use known categorical list for cat__ mapping
-_known_cat = meta.get("categorical_features", []) if meta else []
 
 # Assign group: strip prefix first, then lookup
 def _assign_group(feat_name: str) -> str:

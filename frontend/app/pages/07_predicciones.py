@@ -489,6 +489,9 @@ if _is_case_a:
                 )
                 _eval = evaluate_case_predictions(_y_true_a, _preds) if _y_true_a is not None else None
 
+                if _eval and _eval.get("warning"):
+                    callout("warn", "Advertencia de predicción", _eval["warning"])
+
                 # KPIs
                 e1, e2, e3, e4 = st.columns(4)
                 e1.metric("Latidos evaluados",
@@ -543,7 +546,8 @@ if _is_case_a:
                 _res_df["prediccion"] = _preds
                 if _y_true_a is not None:
                     _res_df["correcto"] = (
-                        pd.Series(_y_true_a) == pd.Series(_preds)
+                        pd.Series(np.asarray(_y_true_a).astype(str))
+                        == pd.Series(np.asarray(_preds).astype(str))
                     ).map({True: "✓", False: "✗"}).values
                 _res_df["time_second"] = _res_df["time_second"].round(3)
 

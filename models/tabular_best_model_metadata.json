@@ -1,55 +1,35 @@
 {
   "winner_model": "random_forest",
-  "winner_test_f1_macro": 0.1884015160901537,
+  "winner_test_f1_macro": 0.1666097265422974,
   "target": "rhythm_label",
   "numeric_features": [
     "time_second",
     "analyzed_duration_sec",
     "total_beats",
     "caseend",
-    "anestart",
     "aneend",
     "opstart",
     "opend",
-    "height",
-    "weight",
     "bmi",
     "preop_plt",
     "preop_pt",
-    "preop_k",
     "preop_alb",
-    "preop_ast",
-    "preop_alt",
     "preop_cr",
-    "tubesize",
-    "intraop_uo",
-    "intraop_crystalloid",
-    "intraop_rocu",
-    "rr_prev",
-    "rr_next",
-    "hr_inst_from_rr_prev",
-    "position_in_case"
+    "intraop_crystalloid"
   ],
   "categorical_features": [
     "optype",
-    "iv1",
-    "aline1",
-    "cline1"
+    "aline1"
   ],
-  "trained_at": "2026-05-29T17:48:28.077257",
-  "best_params": "{\"clf__n_estimators\": 100, \"clf__min_samples_split\": 20, \"clf__min_samples_leaf\": 1, \"clf__max_features\": \"sqrt\", \"clf__max_depth\": 10}",
+  "trained_at": "2026-05-29T19:43:59.170653",
+  "best_params": "{\"clf__n_estimators\": 100, \"clf__min_samples_split\": 10, \"clf__min_samples_leaf\": 2, \"clf__max_features\": 0.5, \"clf__max_depth\": 10}",
   "winner_metrics": {
-    "cv_f1_macro": 0.19337637245858308,
-    "cv_precision_macro": 0.18328327387393156,
-    "cv_recall_macro": 0.2180165553725955,
-    "cv_accuracy": 0.6087859650587832,
-    "cv_balanced_accuracy": 0.2180165553725955,
-    "cv_f1_weighted": 0.5829590485636387,
-    "test_f1_macro": 0.1884015160901537,
-    "test_precision_macro": 0.29347587664755104,
-    "test_recall_macro": 0.20781052159617133,
-    "test_accuracy": 0.5834141475714167,
-    "test_balanced_accuracy": 0.20781052159617133,
-    "test_f1_weighted": 0.5722556138127673
-  }
+    "test_f1_macro": 0.1666097265422974,
+    "test_precision_macro": 0.15598816517968245,
+    "test_recall_macro": 0.18990837754876658,
+    "test_accuracy": 0.6065408735326443,
+    "test_f1_weighted": 0.5940363820974398,
+    "cv_f1_macro": 0.1652431135210984
+  },
+  "benchmark_mode": "medium"
 }

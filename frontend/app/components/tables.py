@@ -84,7 +84,11 @@ def model_comparison_table(
                 return "✓ ok"
             return f"✗ {s}"
 
-        formatted.insert(1, "Estado", df["status"].apply(_status_cell))
+        _estado_vals = df["status"].apply(_status_cell)
+        if "Estado" not in formatted.columns:
+            formatted.insert(1, "Estado", _estado_vals)
+        else:
+            formatted["Estado"] = _estado_vals.values
 
     # Normalise winner name for comparison
     winner_nice = winner_model_id.replace("_", " ").title()
@@ -178,7 +182,10 @@ def feature_importance_table(
         return
 
     out = df[[feature_col, importance_col]].copy().reset_index(drop=True)
-    out.insert(0, "Rank", range(1, len(out) + 1))
+    if "Rank" not in out.columns:
+        out.insert(0, "Rank", range(1, len(out) + 1))
+    else:
+        out["Rank"] = range(1, len(out) + 1)
 
     if group_map:
         out["Grupo"] = out[feature_col].map(lambda f: group_map.get(f, "Otros"))
