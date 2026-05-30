@@ -473,65 +473,24 @@ for _i, _dc in enumerate(_DEMO_CASES):
             st.session_state["_p7_source"]       = "demo"
             st.rerun()
 
-st.write("")
-
-# ---------------------------------------------------------------------------
-# Section 2: Download demo fragment
-# ---------------------------------------------------------------------------
-section_title("Descargar fragmento demo")
-
-# case_337 is the primary recommended downloadable case (mixto representativo)
-_PRIMARY_CASE_ID = 337
-_active_cid = st.session_state.get("_p7_active_case", _PRIMARY_CASE_ID)
-_dc_info    = next((d for d in _DEMO_CASES if int(d["case_id"]) == _active_cid), _DEMO_CASES[0])
-_frag_path  = _DEMO_FRAG_DIR / f"case_{_active_cid}.npy"
-_primary_frag_path = _DEMO_FRAG_DIR / f"case_{_PRIMARY_CASE_ID}.npy"
-
-# Always show the primary recommended download (case_337) even when another case is active
-col_dl_rec, col_dl_active, _ = st.columns([2.2, 2, 3.8])
-
-with col_dl_rec:
-    if _primary_frag_path.exists():
-        st.download_button(
-            label="⬇ Descargar case_337.npy (recomendado)",
-            data=_primary_frag_path.read_bytes(),
-            file_name="case_337.npy",
-            mime="application/octet-stream",
-            use_container_width=True,
-            help="Caso mixto representativo: 54% Normal / 46% Anormal. "
-                 "Sube este archivo para ver cómo el modelo alterna predicciones.",
-        )
-        st.caption(
-            "**Caso mixto representativo** · case_id 337 · tipo: Mixto\n\n"
-            "Caso con proporción balanceada entre registros normales y anormales. "
-            "Permite visualizar cómo el modelo alterna entre predicciones Normal y Anormal "
-            "dentro de una misma señal ECG. Recomendado para probar el flujo completo."
-        )
-    else:
-        st.caption(
-            "La señal cruda .npy del caso 337 aún no está incluida en los artefactos "
-            "de despliegue. La evaluación tabular sigue disponible al hacer clic en «Cargar»."
-        )
-
-with col_dl_active:
-    if _active_cid != _PRIMARY_CASE_ID and _frag_path.exists():
-        st.download_button(
-            label=f"⬇ Descargar case_{_active_cid}.npy",
-            data=_frag_path.read_bytes(),
-            file_name=f"case_{_active_cid}.npy",
-            mime="application/octet-stream",
-            use_container_width=True,
-        )
-        _btype_label = _BINARY_TYPE_META.get(
-            str(_dc_info.get("binary_type", "mixed")).lower(), _BINARY_TYPE_META["mixed"]
-        )["label"]
-        st.caption(
-            f"**{_dc_info.get('title', f'case_{_active_cid}')}** · "
-            f"tipo: {_btype_label} · "
-            f"{_dc_info.get('expected_pattern', '')}"
-        )
-    elif _active_cid != _PRIMARY_CASE_ID:
-        st.caption(f"Señal ECG (.npy) no disponible para case_{_active_cid}.")
+        if _cid == 337:
+            _frag_337 = _DEMO_FRAG_DIR / "case_337.npy"
+            if _frag_337.exists():
+                st.download_button(
+                    label="⬇ Descargar case_337.npy",
+                    data=_frag_337.read_bytes(),
+                    file_name="case_337.npy",
+                    mime="application/octet-stream",
+                    use_container_width=True,
+                    key="dl_case_337",
+                )
+                st.caption(
+                    "Este caso ya está cargado como demo. "
+                    "Si deseas probar la carga manual, descarga el .npy "
+                    "y súbelo desde la sección de exploración ECG."
+                )
+            else:
+                st.caption("Archivo .npy no incluido en esta versión desplegada.")
 
 st.write("")
 
@@ -900,161 +859,160 @@ if _is_case_a:
         callout("warn", "Features no disponibles",
                 f"No se pudieron obtener features tabulares para case_id={_active_cid}. "
                 "Sin RR intervals y metadata clínica no es posible ejecutar el modelo.")
+    else:
+        _preds_raw = st.session_state.get("_p7_predictions")
+        if _preds_raw is None:
+            try:
+                _preds_raw = predict_case_windows(_feat_df, _model_p, _feat_cols_a)
+                st.session_state["_p7_predictions"] = _preds_raw
+            except Exception as _pe:
+                callout("err", "Error en predicción", str(_pe))
+                _preds_raw = None
 
-        if _feat_df is not None and len(_feat_df) > 0:
-            _preds_raw = st.session_state.get("_p7_predictions")
-            if _preds_raw is None:
-                try:
-                    _preds_raw = predict_case_windows(_feat_df, _model_p, _feat_cols_a)
-                    st.session_state["_p7_predictions"] = _preds_raw
-                except Exception as _pe:
-                    callout("err", "Error en predicción", str(_pe))
-                    _preds_raw = None
+        if _preds_raw is not None:
+            _y_pred_bin = _normalize_preds(_preds_raw)
+            _y_true_str = (
+                _feat_df["rhythm_label"].to_numpy()
+                if "rhythm_label" in _feat_df.columns else None
+            )
+            _y_true_bin = _to_binary(_y_true_str) if _y_true_str is not None else None
+            _eval = (
+                _evaluate_binary(_y_true_bin, _y_pred_bin)
+                if _y_true_bin is not None else None
+            )
 
-            if _preds_raw is not None:
-                _y_pred_bin = _normalize_preds(_preds_raw)
-                _y_true_str = (
-                    _feat_df["rhythm_label"].to_numpy()
-                    if "rhythm_label" in _feat_df.columns else None
-                )
-                _y_true_bin = _to_binary(_y_true_str) if _y_true_str is not None else None
-                _eval = (
-                    _evaluate_binary(_y_true_bin, _y_pred_bin)
-                    if _y_true_bin is not None else None
-                )
+            st.write("")
+            section_title("Métricas binarias del caso")
 
+            e1, e2, e3, e4, e5, e6 = st.columns(6)
+            e1.metric("Evaluados",
+                      f"{_eval['n']:,}" if _eval else f"{len(_y_pred_bin):,}")
+            e2.metric("Accuracy",
+                      f"{_eval['accuracy']:.1%}" if _eval and _eval.get('accuracy') is not None else "—")
+            e3.metric("Balanced acc.",
+                      f"{_eval['balanced']:.1%}" if _eval and _eval.get('balanced') is not None else "—")
+            e4.metric("Precision Anormal",
+                      f"{_eval['precision']:.1%}" if _eval and _eval.get('precision') is not None else "—")
+            e5.metric("Recall Anormal",
+                      f"{_eval['recall']:.1%}" if _eval and _eval.get('recall') is not None else "—")
+            e6.metric("F1 Anormal",
+                      f"{_eval['f1']:.1%}" if _eval and _eval.get('f1') is not None else "—")
+
+            if _eval and _eval.get("cm") is not None:
                 st.write("")
-                section_title("Métricas binarias del caso")
-
-                e1, e2, e3, e4, e5, e6 = st.columns(6)
-                e1.metric("Evaluados",
-                          f"{_eval['n']:,}" if _eval else f"{len(_y_pred_bin):,}")
-                e2.metric("Accuracy",
-                          f"{_eval['accuracy']:.1%}" if _eval and _eval.get('accuracy') is not None else "—")
-                e3.metric("Balanced acc.",
-                          f"{_eval['balanced']:.1%}" if _eval and _eval.get('balanced') is not None else "—")
-                e4.metric("Precision Anormal",
-                          f"{_eval['precision']:.1%}" if _eval and _eval.get('precision') is not None else "—")
-                e5.metric("Recall Anormal",
-                          f"{_eval['recall']:.1%}" if _eval and _eval.get('recall') is not None else "—")
-                e6.metric("F1 Anormal",
-                          f"{_eval['f1']:.1%}" if _eval and _eval.get('f1') is not None else "—")
-
-                if _eval and _eval.get("cm") is not None:
-                    st.write("")
-                    section_title("Matriz de confusión binaria (caso actual)")
-                    _cm = _eval["cm"]
-                    _cm_df = pd.DataFrame(
-                        _cm,
-                        index=["Real: Normal", "Real: Anormal"],
-                        columns=["Pred: Normal", "Pred: Anormal"],
+                section_title("Matriz de confusión binaria (caso actual)")
+                _cm = _eval["cm"]
+                _cm_df = pd.DataFrame(
+                    _cm,
+                    index=["Real: Normal", "Real: Anormal"],
+                    columns=["Pred: Normal", "Pred: Anormal"],
+                )
+                with st.container(border=True):
+                    st.dataframe(_cm_df, use_container_width=False)
+                    _tn, _fp_v, _fn, _tp = _cm.ravel() if _cm.size == 4 else (0, 0, 0, 0)
+                    st.caption(
+                        f"TN={_tn:,}  FP={_fp_v:,}  FN={_fn:,}  TP={_tp:,} "
+                        "· positivo = Anormal"
                     )
-                    with st.container(border=True):
-                        st.dataframe(_cm_df, use_container_width=False)
-                        _tn, _fp_v, _fn, _tp = _cm.ravel() if _cm.size == 4 else (0, 0, 0, 0)
-                        st.caption(
-                            f"TN={_tn:,}  FP={_fp_v:,}  FN={_fn:,}  TP={_tp:,} "
-                            "· positivo = Anormal"
+
+            _pred_vis_df = (
+                _feat_df[["time_second", "rhythm_label"]].copy()
+                if "time_second" in _feat_df.columns else pd.DataFrame()
+            )
+            if "beat_type" in _feat_df.columns:
+                _pred_vis_df["beat_type"] = _feat_df["beat_type"].values
+            _pred_vis_df["prediccion"] = _y_pred_bin
+
+            st.write("")
+            section_title("ECG con regiones predichas")
+            _max_ecg_sec = st.slider(
+                "Ventana ECG (segundos)", min_value=10, max_value=60,
+                value=30, step=5, key="ecg_window_slider",
+            )
+
+            with st.container(border=True):
+                st.plotly_chart(
+                    plot_ecg_with_prediction_regions(
+                        _disp_sig, TARGET_FS, _pred_vis_df,
+                        time_col="time_second", pred_col="prediccion",
+                        real_col="rhythm_label", beat_type_col="beat_type",
+                        max_seconds=float(_max_ecg_sec), start_offset=_disp_offset,
+                    ),
+                    use_container_width=True, config={"displayModeBar": False},
+                )
+                st.caption(
+                    "Fondo rojo = regiones donde el modelo predice Anormal. "
+                    "Línea gris = señal ECG visualizada."
+                )
+
+            st.write("")
+            section_title("Tabla: Real vs Predicción binaria")
+
+            _show_cols_base = ["time_second", "rhythm_label"]
+            if "beat_type" in _feat_df.columns:
+                _show_cols_base.append("beat_type")
+            _res_df = _feat_df[_show_cols_base].copy()
+            _res_df["Real"]       = [_display(v) for v in (_y_true_bin if _y_true_bin is not None else ["—"] * len(_y_pred_bin))]
+            _res_df["Predicción"] = [_display(v) for v in _y_pred_bin]
+            if _y_true_bin is not None:
+                _correct_mask = pd.Series(
+                    np.asarray(_y_true_bin).astype(str) == np.asarray(_y_pred_bin).astype(str),
+                    index=_res_df.index,
+                )
+                _res_df["✓/✗"] = _correct_mask.map({True: "✓", False: "✗"})
+            if "time_second" in _res_df.columns:
+                _res_df["time_second"] = _res_df["time_second"].round(3)
+
+            col_filt, _ = st.columns([2, 6])
+            with col_filt:
+                _show_errors = st.checkbox("Mostrar solo errores", value=False)
+            _res_display = (
+                _res_df[_res_df["✓/✗"] == "✗"]
+                if _show_errors and "✓/✗" in _res_df.columns
+                else _res_df
+            )
+
+            with st.container(border=True):
+                st.dataframe(
+                    _res_display.head(300),
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "✓/✗":         st.column_config.TextColumn(width="small"),
+                        "time_second": st.column_config.NumberColumn(
+                            "time (s)", format="%.3f", width="small"),
+                        "rhythm_label":st.column_config.TextColumn(
+                            "rhythm_label (original)", width="medium"),
+                        "Real":        st.column_config.TextColumn(
+                            "Real (binario)", width="medium"),
+                        "Predicción":  st.column_config.TextColumn(
+                            "Predicción", width="medium"),
+                    },
+                )
+                st.caption(
+                    "rhythm_label es contexto — evaluación: Normal (N) vs Anormal (≠ N). "
+                    f"Mostrando {min(len(_res_display), 300):,} de {len(_res_display):,} filas."
+                )
+
+            if _y_true_bin is not None and "✓/✗" in _res_df.columns:
+                n_err = (_res_df["✓/✗"] == "✗").sum()
+                if n_err > 0:
+                    with st.expander(f"Errores de clasificación ({n_err:,})", expanded=False):
+                        err_tbl = (
+                            _res_df[_res_df["✓/✗"] == "✗"]
+                            .groupby(["Real", "Predicción"])
+                            .size()
+                            .reset_index(name="count")
+                            .sort_values("count", ascending=False)
                         )
+                        st.dataframe(err_tbl, use_container_width=True, hide_index=True)
 
-                _pred_vis_df = (
-                    _feat_df[["time_second", "rhythm_label"]].copy()
-                    if "time_second" in _feat_df.columns else pd.DataFrame()
-                )
-                if "beat_type" in _feat_df.columns:
-                    _pred_vis_df["beat_type"] = _feat_df["beat_type"].values
-                _pred_vis_df["prediccion"] = _y_pred_bin
-
-                st.write("")
-                section_title("ECG con regiones predichas")
-                _max_ecg_sec = st.slider(
-                    "Ventana ECG (segundos)", min_value=10, max_value=60,
-                    value=30, step=5, key="ecg_window_slider",
-                )
-
-                with st.container(border=True):
-                    st.plotly_chart(
-                        plot_ecg_with_prediction_regions(
-                            _disp_sig, TARGET_FS, _pred_vis_df,
-                            time_col="time_second", pred_col="prediccion",
-                            real_col="rhythm_label", beat_type_col="beat_type",
-                            max_seconds=float(_max_ecg_sec), start_offset=_disp_offset,
-                        ),
-                        use_container_width=True, config={"displayModeBar": False},
-                    )
-                    st.caption(
-                        "Fondo rojo = regiones donde el modelo predice Anormal. "
-                        "Línea gris = señal ECG visualizada."
-                    )
-
-                st.write("")
-                section_title("Tabla: Real vs Predicción binaria")
-
-                _show_cols_base = ["time_second", "rhythm_label"]
-                if "beat_type" in _feat_df.columns:
-                    _show_cols_base.append("beat_type")
-                _res_df = _feat_df[_show_cols_base].copy()
-                _res_df["Real"]       = [_display(v) for v in (_y_true_bin if _y_true_bin is not None else ["—"] * len(_y_pred_bin))]
-                _res_df["Predicción"] = [_display(v) for v in _y_pred_bin]
-                if _y_true_bin is not None:
-                    _correct_mask = pd.Series(
-                        np.asarray(_y_true_bin).astype(str) == np.asarray(_y_pred_bin).astype(str),
-                        index=_res_df.index,
-                    )
-                    _res_df["✓/✗"] = _correct_mask.map({True: "✓", False: "✗"})
-                if "time_second" in _res_df.columns:
-                    _res_df["time_second"] = _res_df["time_second"].round(3)
-
-                col_filt, _ = st.columns([2, 6])
-                with col_filt:
-                    _show_errors = st.checkbox("Mostrar solo errores", value=False)
-                _res_display = (
-                    _res_df[_res_df["✓/✗"] == "✗"]
-                    if _show_errors and "✓/✗" in _res_df.columns
-                    else _res_df
-                )
-
-                with st.container(border=True):
-                    st.dataframe(
-                        _res_display.head(300),
-                        use_container_width=True,
-                        hide_index=True,
-                        column_config={
-                            "✓/✗":         st.column_config.TextColumn(width="small"),
-                            "time_second": st.column_config.NumberColumn(
-                                "time (s)", format="%.3f", width="small"),
-                            "rhythm_label":st.column_config.TextColumn(
-                                "rhythm_label (original)", width="medium"),
-                            "Real":        st.column_config.TextColumn(
-                                "Real (binario)", width="medium"),
-                            "Predicción":  st.column_config.TextColumn(
-                                "Predicción", width="medium"),
-                        },
-                    )
-                    st.caption(
-                        "rhythm_label es contexto — evaluación: Normal (N) vs Anormal (≠ N). "
-                        f"Mostrando {min(len(_res_display), 300):,} de {len(_res_display):,} filas."
-                    )
-
-                if _y_true_bin is not None and "✓/✗" in _res_df.columns:
-                    n_err = (_res_df["✓/✗"] == "✗").sum()
-                    if n_err > 0:
-                        with st.expander(f"Errores de clasificación ({n_err:,})", expanded=False):
-                            err_tbl = (
-                                _res_df[_res_df["✓/✗"] == "✗"]
-                                .groupby(["Real", "Predicción"])
-                                .size()
-                                .reset_index(name="count")
-                                .sort_values("count", ascending=False)
-                            )
-                            st.dataframe(err_tbl, use_container_width=True, hide_index=True)
-
-                callout(
-                    "warn",
-                    "Demo académica — no para uso clínico",
-                    "Resultados sobre un caso individual. "
-                    "Métricas oficiales: test_f1_macro=0.615, accuracy=0.633.",
-                )
+            callout(
+                "warn",
+                "Demo académica — no para uso clínico",
+                "Resultados sobre un caso individual. "
+                "Métricas oficiales: test_f1_macro=0.615, accuracy=0.633.",
+            )
 
 # ===========================================================================
 # ECG sin anotaciones — solo visualización

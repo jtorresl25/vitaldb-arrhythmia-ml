@@ -123,6 +123,8 @@ data/raw/vitaldb_waveforms/*
 !frontend/app/app_artifacts/reports/figures/**
 !frontend/app/app_artifacts/demo/
 !frontend/app/app_artifacts/demo/**
+!frontend/app/app_artifacts/demo/case_features/
+!frontend/app/app_artifacts/demo/case_features/**
 !frontend/app/app_artifacts/demo/npy_cases/
 !frontend/app/app_artifacts/demo/npy_cases/**
 

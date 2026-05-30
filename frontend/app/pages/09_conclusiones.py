@@ -124,7 +124,7 @@ if meta and "best_hyperparams_per_model" in meta:
 page_header(
     "Conclusiones",
     "Resumen final del modelo binario Normal/Anormal, sus alcances, "
-    "limitaciones y próximos pasos.",
+    "limitaciones y trabajo futuro.",
     badge_html=badge_row(badge("Cierre del proyecto", "info"), badge("Académico", "muted")),
 )
 
@@ -352,44 +352,36 @@ with lim2:
 st.write("")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PRÓXIMOS PASOS
+# TRABAJO FUTURO
 # ══════════════════════════════════════════════════════════════════════════════
-section_title("Próximos pasos — hoja de ruta")
+section_title("Trabajo futuro")
 
-col_near, col_far = st.columns(2)
+col_meto, col_inv = st.columns(2)
 
-with col_near:
+with col_meto:
     with st.container(border=True):
-        card_header("Corto plazo", "completar el despliegue",
-                    right_html=badge("prioridad alta", "err"))
+        card_header("Línea metodológica futura", "extensiones del enfoque tabular",
+                    right_html=badge("metodológico", "info"))
         kv_table([
-            ("1", "Verificar que <code>app_artifacts/</code> esté completo "
-                  "y Streamlit Cloud cargue modelos y CSV correctamente."),
-            ("2", "Mejorar la visualización de ECG: tramos coloreados en rojo "
-                  "para predicciones Anormales."),
-            ("3", "Validar disponibilidad del archivo <code>case_337.npy</code> "
-                  "para el caso demo mixto."),
-            ("4", "Revisar página 03 (Dataset y limpieza) para coherencia "
-                  "con el pipeline binario final."),
+            ("A1", "Evaluar selección de variables con criterios clínicos y no solo técnicos."),
+            ("A2", "Explorar calibración de probabilidades para interpretar mejor "
+                   "la confianza del modelo."),
+            ("A3", "Analizar ajustes de umbral si el objetivo prioritario fuera "
+                   "aumentar la detección de Anormal."),
+            ("A4", "Validar el modelo en casos externos o en datos de otras instituciones."),
         ])
 
-with col_far:
+with col_inv:
     with st.container(border=True):
-        card_header("Mediano plazo", "mejorar el modelo",
-                    right_html=badge("calidad", "info"))
+        card_header("Línea de investigación futura", "más allá del modelo tabular",
+                    right_html=badge("investigación", "muted"))
         kv_table([
-            ("5", "<b>Ajuste de umbral</b>: explorar umbrales &lt; 0.5 "
-                  "para aumentar recall de Anormal."),
-            ("6", "<b>Calibración</b>: agregar "
-                  "<code>CalibratedClassifierCV</code> para probabilidades calibradas."),
-            ("7", "<b>Features clínicas</b>: evaluar selección de variables "
-                  "con criterios clínicos, no solo estadísticos."),
-            ("8", "<b>SHAP</b>: reemplazar importancia global por "
-                  "explicaciones locales por predicción."),
-            ("9", "<b>Validación externa</b>: evaluar en datos de "
-                  "otras instituciones."),
-            ("10", "<b>1D-CNN</b>: explorar modelos directamente sobre señal ECG "
-                   "como línea de investigación futura."),
+            ("B1", "Entrenar modelos diseñados para trabajar directamente con ECG crudo."),
+            ("B2", "Comparar el enfoque tabular actual con modelos 1D-CNN "
+                   "o arquitecturas temporales."),
+            ("B3", "Integrar detección automática de picos R para construir features RR "
+                   "desde señales externas."),
+            ("B4", "Evaluar explicabilidad local en futuras versiones de investigación."),
         ])
 
 st.write("")
@@ -402,7 +394,7 @@ section_title("Reflexión final")
 with st.container(border=True):
     card_header(
         "Balance del proyecto",
-        "lo que logramos y lo que falta",
+        "alcances y proyección académica",
         right_html=badge("académico", "muted"),
     )
     st.write("")
@@ -417,8 +409,8 @@ with st.container(border=True):
         f"El modelo final, <b>{_winner_nice}</b>, ofrece un balance razonable entre "
         f"desempeño, simplicidad e interpretabilidad, y queda desplegable en Streamlit "
         f"mediante artefactos livianos. "
-        f"Los próximos pasos apuntan a ajuste de umbral, calibración de probabilidades "
-        f"y exploración de validación externa."
+        f"Las líneas de trabajo futuro apuntan a validación externa, calibración de probabilidades "
+        f"y exploración de modelos sobre señal ECG cruda como proyecciones de investigación."
         f"</p>"
     )
     st.write("")

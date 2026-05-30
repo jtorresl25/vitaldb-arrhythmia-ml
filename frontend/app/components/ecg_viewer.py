@@ -5,8 +5,6 @@ All functions return go.Figure objects; callers pass them to st.plotly_chart().
 
 from __future__ import annotations
 
-from itertools import groupby as _groupby
-
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -194,11 +192,6 @@ def plot_annotations_on_ecg(
 # ---------------------------------------------------------------------------
 _BINARY_NORMAL_STRS = frozenset({"normal", "n", "0", "false"})
 
-_COLOR_NORMAL_LINE   = "#cbd5e1"        # gray/light — normal prediction
-_COLOR_ABNORMAL_LINE = "#ef4444"        # red — abnormal prediction
-_WIDTH_NORMAL_LINE   = 1.2
-_WIDTH_ABNORMAL_LINE = 1.8
-
 
 def _is_abnormal_pred(x) -> bool:
     """Return True if x represents an abnormal binary prediction."""
@@ -217,46 +210,6 @@ def _is_binary_pred_col(series: pd.Series) -> bool:
 def _rhythm_label_to_binary(label: str) -> str:
     """Convert an original rhythm_label to binary ('normal' / 'abnormal')."""
     return "normal" if str(label).strip() == "N" else "abnormal"
-
-
-def _build_binary_segment_traces(
-    sig: np.ndarray,
-    t_arr: np.ndarray,
-    pred_mask: np.ndarray,
-) -> list[go.Scatter]:
-    """One go.Scatter per contiguous same-prediction run, colored by prediction.
-
-    pred_mask is a boolean array (True = abnormal) aligned with t_arr / sig.
-    Legend entries are de-duplicated: one per class.
-    """
-    traces: list[go.Scatter] = []
-    seen: set[str] = set()
-
-    for is_abn, grp in _groupby(range(len(pred_mask)), key=lambda i: bool(pred_mask[i])):
-        idx = list(grp)
-        # Include one overlap sample to avoid visible gaps at segment boundaries
-        if idx[-1] + 1 < len(t_arr):
-            idx.append(idx[-1] + 1)
-
-        color  = _COLOR_ABNORMAL_LINE if is_abn else _COLOR_NORMAL_LINE
-        width  = _WIDTH_ABNORMAL_LINE if is_abn else _WIDTH_NORMAL_LINE
-        name   = "Predicción: Anormal" if is_abn else "Predicción: Normal"
-        key    = "abn" if is_abn else "nor"
-        show   = key not in seen
-        seen.add(key)
-
-        traces.append(go.Scatter(
-            x=t_arr[idx],
-            y=sig[idx],
-            mode="lines",
-            name=name,
-            line=dict(color=color, width=width),
-            showlegend=show,
-            legendgroup=key,
-            hovertemplate=f"t=%{{x:.3f}} s  amp=%{{y:.4f}}<extra>{name}</extra>",
-        ))
-
-    return traces
 
 
 # ---------------------------------------------------------------------------
@@ -369,62 +322,75 @@ def plot_ecg_with_prediction_regions(
     )
 
     # ══════════════════════════════════════════════════════════════════════
-    # BINARY MODE — color the ECG line by prediction
+    # BINARY MODE — gray ECG + red vrect background for Anormal regions
     # ══════════════════════════════════════════════════════════════════════
     if use_binary:
         visible_start = start_offset
         visible_end   = t_end
-        legend_seen: dict[str, bool] = {"normal": False, "abnormal": False}
-        traces_added  = 0
 
-        for i in range(len(pdf)):
-            row      = pdf.iloc[i]
-            pred     = row[pred_col]
-            seg_s    = float(row[time_col])
-            seg_e    = float(pdf.iloc[i + 1][time_col]) if i < len(pdf) - 1 else visible_end
+        # Single gray ECG trace — never segmented
+        fig.add_trace(go.Scatter(
+            x=t_arr, y=valid_sig,
+            mode="lines",
+            name="ECG",
+            line=dict(color="#cbd5e1", width=1.2),
+            hovertemplate="t=%{x:.3f} s  amp=%{y:.4f}<extra></extra>",
+            showlegend=False,
+        ))
 
-            # Clip to visible window
-            seg_s = max(seg_s, visible_start)
-            seg_e = min(seg_e, visible_end)
+        # Red vrect per Anormal interval
+        pdf_vis = pdf[
+            (pdf[time_col] >= visible_start - 5) &
+            (pdf[time_col] <= visible_end + 5)
+        ].copy().reset_index(drop=True)
 
-            if seg_e <= seg_s:
-                continue
+        vrect_count = 0
 
-            mask = (t_arr >= seg_s) & (t_arr < seg_e)
-            if mask.sum() < 2:
-                continue
+        if not pdf_vis.empty and pred_col in pdf_vis.columns:
+            for i in range(len(pdf_vis)):
+                row   = pdf_vis.iloc[i]
+                seg_s = float(row[time_col])
+                seg_e = (
+                    float(pdf_vis.iloc[i + 1][time_col])
+                    if i < len(pdf_vis) - 1
+                    else visible_end
+                )
+                seg_s = max(seg_s, visible_start)
+                seg_e = min(seg_e, visible_end)
 
-            is_abn = _is_abnormal_pred(pred)
-            key    = "abnormal" if is_abn else "normal"
-            name   = "Predicción: Anormal" if is_abn else "Predicción: Normal"
+                if seg_e <= seg_s:
+                    continue
 
+                if _is_abnormal_pred(row[pred_col]):
+                    fig.add_vrect(
+                        x0=seg_s, x1=seg_e,
+                        fillcolor="rgba(239, 68, 68, 0.18)",
+                        line_width=0,
+                        layer="below",
+                    )
+                    vrect_count += 1
+
+            # Fallback: loop produced no vrects but all visible preds are Anormal
+            if vrect_count == 0:
+                all_abn = all(
+                    _is_abnormal_pred(r[pred_col]) for _, r in pdf_vis.iterrows()
+                )
+                if all_abn:
+                    fig.add_vrect(
+                        x0=visible_start, x1=visible_end,
+                        fillcolor="rgba(239, 68, 68, 0.16)",
+                        line_width=0, layer="below",
+                    )
+                    vrect_count += 1
+
+        # Legend entry
+        if vrect_count > 0:
             fig.add_trace(go.Scatter(
-                x=t_arr[mask],
-                y=valid_sig[mask],
-                mode="lines",
-                line=dict(
-                    color="#ef4444" if is_abn else "#cbd5e1",
-                    width=2.0 if is_abn else 1.2,
-                ),
-                name=name,
-                showlegend=not legend_seen[key],
-                hovertemplate=(
-                    f"tiempo=%{{x:.2f}}s<br>amplitud=%{{y:.3f}}<br>"
-                    f"predicción={'Anormal' if is_abn else 'Normal'}"
-                    "<extra></extra>"
-                ),
-            ))
-            legend_seen[key] = True
-            traces_added += 1
-
-        # Fallback: if no beats landed in the visible window, draw plain gray ECG
-        if traces_added == 0:
-            fig.add_trace(go.Scatter(
-                x=t_arr, y=valid_sig, mode="lines",
-                name="ECG sin predicción",
-                line=dict(color="#d1d5db", width=1.1),
-                hovertemplate="t=%{x:.3f} s  amp=%{y:.4f}<extra></extra>",
-                showlegend=False,
+                x=[None], y=[None],
+                mode="markers",
+                marker=dict(size=10, color="rgba(239, 68, 68, 0.6)", symbol="square"),
+                name="Predicción: Anormal",
+                showlegend=True,
             ))
 
         # Error markers: binarized real_col ≠ binarized pred_col

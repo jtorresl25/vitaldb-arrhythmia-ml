@@ -625,7 +625,8 @@ with lim2:
         "Importancia global — sin explicaciones locales",
         "La importancia de features es una medida global del modelo y no explica "
         "por qué un latido específico fue clasificado de cierta manera. "
-        "Para explicaciones locales se necesita SHAP o LIME.",
+        "Las técnicas de explicabilidad local por predicción individual quedan fuera "
+        "del alcance de este análisis y constituyen una proyección de investigación futura.",
     )
     callout(
         "warn",
@@ -636,11 +637,12 @@ with lim2:
     )
     callout(
         "info",
-        "Cómo mejorar esta página",
-        "Para interpretabilidad local, añadir SHAP values o "
-        "Permutation Importance (más robusto que coeficientes para SVC lineal). "
-        "Ambas técnicas permiten explicar por qué un latido específico fue clasificado "
-        "como Normal o Anormal.",
+        "Alcance de la interpretabilidad",
+        "La interpretación presentada corresponde a una lectura global del modelo "
+        "Linear SVC mediante la importancia de sus variables transformadas. "
+        "Estos resultados ayudan a entender qué grupos de variables aportan más a la "
+        "clasificación binaria Normal/Anormal, pero no deben interpretarse como causalidad "
+        "clínica ni como explicación individual de cada registro.",
     )
 
 page_footer()
