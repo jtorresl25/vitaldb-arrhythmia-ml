@@ -535,3 +535,102 @@ def plot_ecg_with_prediction_regions(
         ),
     )
     return fig
+
+
+# ---------------------------------------------------------------------------
+# plot_ecg_with_binary_prediction_bands
+# ---------------------------------------------------------------------------
+def plot_ecg_with_binary_prediction_bands(
+    signal,
+    fs: float,
+    pred_df: pd.DataFrame,
+    time_col: str = "time_second",
+    pred_col: str = "prediccion",
+    segment_start_time: float = 0.0,
+    max_seconds: float = 30.0,
+    title: str = "ECG con regiones predichas por el modelo",
+) -> go.Figure:
+    """ECG gris con franjas rojas donde el modelo predice Anormal.
+
+    El eje x del gráfico es RELATIVO (0 … max_seconds).
+    Las predicciones se convierten a tiempo relativo restando segment_start_time,
+    lo que resuelve el desajuste cuando time_second es absoluto (p. ej. 2000 s)
+    y la señal mostrada empieza desde 0.
+    """
+    def _is_anormal(x) -> bool:
+        s = str(x).strip().lower()
+        return s in {"anormal", "abnormal", "no n", "non-normal", "not normal", "1", "true"}
+
+    signal = np.asarray(signal).astype(float)
+    n = min(len(signal), int(max_seconds * fs))
+    signal = signal[:n]
+    t_rel = np.arange(n) / fs  # eje x siempre relativo: 0 … max_seconds
+
+    fig = go.Figure()
+
+    # ── Rectángulos rojos (tiempo relativo) ──────────────────────────────────
+    vrect_count = 0
+    try:
+        dfp = pred_df.copy()
+        if time_col in dfp.columns and pred_col in dfp.columns:
+            dfp["t_rel"] = pd.to_numeric(dfp[time_col], errors="coerce") - float(segment_start_time)
+            dfp = dfp.dropna(subset=["t_rel"])
+            dfp = dfp[(dfp["t_rel"] >= 0) & (dfp["t_rel"] <= max_seconds)].copy()
+            dfp = dfp.sort_values("t_rel").reset_index(drop=True)
+
+            for i in range(len(dfp)):
+                pred  = dfp.loc[i, pred_col]
+                start = float(dfp.loc[i, "t_rel"])
+                end   = float(dfp.loc[i + 1, "t_rel"]) if i < len(dfp) - 1 else float(max_seconds)
+                start = max(0.0, min(float(max_seconds), start))
+                end   = max(0.0, min(float(max_seconds), end))
+
+                if end > start and _is_anormal(pred):
+                    fig.add_vrect(
+                        x0=start, x1=end,
+                        fillcolor="rgba(239, 68, 68, 0.22)",
+                        line_width=0,
+                        layer="below",
+                    )
+                    vrect_count += 1
+    except Exception:
+        pass
+
+    # ── Línea ECG gris ───────────────────────────────────────────────────────
+    fig.add_trace(go.Scatter(
+        x=t_rel,
+        y=signal,
+        mode="lines",
+        line=dict(color="#cbd5e1", width=1.2),
+        name="ECG",
+        hovertemplate="tiempo=%{x:.2f}s<br>amplitud=%{y:.3f}<extra></extra>",
+    ))
+
+    # ── Leyenda dummy para zonas rojas ───────────────────────────────────────
+    if vrect_count > 0:
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None],
+            mode="markers",
+            marker=dict(size=12, color="rgba(239, 68, 68, 0.7)", symbol="square"),
+            name="Predicción: Anormal",
+        ))
+
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=12, color="#c8d2e5")),
+        height=430,
+        plot_bgcolor="#111827",
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#cbd5e1"),
+        margin=dict(l=20, r=20, t=40, b=40),
+        xaxis=dict(
+            title="tiempo relativo (s)",
+            range=[0, max_seconds],
+            gridcolor="rgba(255,255,255,0.06)",
+        ),
+        yaxis=dict(
+            title="amplitud",
+            gridcolor="rgba(255,255,255,0.06)",
+        ),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    return fig

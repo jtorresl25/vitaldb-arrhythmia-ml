@@ -149,30 +149,29 @@ def _classify_case(row: pd.Series) -> list[str]:
         cats.append("abnormal_good")
     if both and 0.25 <= pct_n <= 0.75 and 0.25 <= pct_ab <= 0.75 and acc >= 0.75:
         cats.append("mixed_good")
-    if both and acc < 0.65:
-        cats.append("mixed_hard")
+        cats.append("mixed_good_2")
+    elif both and 0.15 <= pct_n <= 0.85 and acc >= 0.65 and rec_ab >= 0.50:
+        cats.append("mixed_good_2")
     if rec_ab >= 0.90 and n_ab >= 100:
         cats.append("abnormal_recall_good")
     return cats
 
 
 # ---------------------------------------------------------------------------
-# Auto-select at most 5 demo cases
+# Auto-select at most 4 demo cases (no mixed_hard in final version)
 # ---------------------------------------------------------------------------
 _CATEGORY_PRIORITY = [
     "normal_good",
     "abnormal_good",
     "mixed_good",
-    "abnormal_recall_good",
-    "mixed_hard",           # optional — shows model limitations
+    "mixed_good_2",         # second mixed case — same criteria as mixed_good
 ]
 
 _CATEGORY_META = {
-    "normal_good":         ("Principalmente normal",    "normal",   "normal"),
-    "abnormal_good":       ("Principalmente anormal",   "abnormal", "abnormal"),
-    "mixed_good":          ("Caso mixto (bien clasificado)", "mixed",  "mixed"),
-    "abnormal_recall_good":("Alta detección anormal",   "abnormal", "abnormal"),
-    "mixed_hard":          ("Caso difícil (limitación)", "difficult","difficult"),
+    "normal_good":   ("Normal estable",          "normal",   "normal"),
+    "abnormal_good": ("Anormal claro",            "abnormal", "abnormal"),
+    "mixed_good":    ("Mixto representativo",     "mixed",    "mixed"),
+    "mixed_good_2":  ("Mixto adicional",          "mixed",    "mixed"),
 }
 
 
@@ -218,11 +217,13 @@ def _build_demo_catalogue(df: pd.DataFrame) -> pd.DataFrame:
             f"{n_nor} normales ({pct_n:.0%}) y "
             f"{n_abn} anormales ({pct_ab:.0%}). "
             f"Accuracy={acc:.3f}."
+            + (" Seleccionado por rendimiento en evaluación por caso."
+               if cat == "mixed_good_2" else "")
         )
         expected = (
             "Mayoría normales" if pct_n >= 0.90 else
             "Mayoría anormales" if pct_ab >= 0.90 else
-            "Mezcla normal/anormal"
+            "Normal + Anormal"
         )
         notes = (
             f"Seleccionado como {cat}. "

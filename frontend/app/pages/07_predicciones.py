@@ -120,19 +120,18 @@ _DEMO_CASES_FALLBACK: list[dict] = [
         "accuracy": 0.784, "recall_abnormal": 0.811, "notes": "",
     },
     {
-        "case_id": 3098, "title": "Caso difícil", "binary_type": "difficult",
-        "description": "Incluido para mostrar limitaciones. "
-                       "Accuracy de 0.647 y bajo recall para Anormal.",
-        "expected_pattern": "Mezcla normal/anormal", "n_beats": 750,
-        "accuracy": 0.647, "recall_abnormal": 0.0, "notes": "",
+        "case_id": 1996, "title": "Mixto adicional", "binary_type": "mixed",
+        "description": "Caso con presencia de registros Normal y Anormal. "
+                       "El modelo alcanza accuracy de 0.754 y recall anormal de 0.771.",
+        "expected_pattern": "Normal + Anormal", "n_beats": 724,
+        "accuracy": 0.754, "recall_abnormal": 0.771, "notes": "",
     },
 ]
 
 _BINARY_TYPE_META = {
-    "normal":    {"icon": "✓",  "accent": "teal", "label": "Normal"},
-    "abnormal":  {"icon": "⚠",  "accent": "err",  "label": "Anormal"},
-    "mixed":     {"icon": "📊", "accent": "blue",  "label": "Mixto"},
-    "difficult": {"icon": "⚡", "accent": "warn",  "label": "Difícil"},
+    "normal":   {"icon": "✓",  "accent": "teal", "label": "Normal"},
+    "abnormal": {"icon": "⚠",  "accent": "err",  "label": "Anormal"},
+    "mixed":    {"icon": "📊", "accent": "blue",  "label": "Mixto"},
 }
 
 
@@ -555,6 +554,7 @@ try:
     from components.ecg_viewer import (
         plot_ecg_signal, plot_raw_vs_processed,
         plot_annotations_on_ecg, plot_ecg_with_prediction_regions,
+        plot_ecg_with_binary_prediction_bands,
     )
     _EVAL_MODULES_OK = True
     # Also check full waveform path if modules loaded
@@ -864,26 +864,70 @@ if _is_case_a:
             )
 
             st.write("")
-            section_title("Métricas binarias del caso")
+            section_title("Resumen del caso evaluado")
 
-            e1, e2, e3, e4, e5, e6 = st.columns(6)
-            e1.metric("Evaluados",
-                      f"{_eval['n']:,}" if _eval else f"{len(_y_pred_bin):,}")
-            e2.metric("Accuracy",
-                      f"{_eval['accuracy']:.1%}" if _eval and _eval.get('accuracy') is not None else "—")
-            e3.metric("Balanced acc.",
-                      f"{_eval['balanced']:.1%}" if _eval and _eval.get('balanced') is not None else "—")
-            e4.metric("Precision Anormal",
-                      f"{_eval['precision']:.1%}" if _eval and _eval.get('precision') is not None else "—")
-            e5.metric("Recall Anormal",
-                      f"{_eval['recall']:.1%}" if _eval and _eval.get('recall') is not None else "—")
-            e6.metric("F1 Anormal",
-                      f"{_eval['f1']:.1%}" if _eval and _eval.get('f1') is not None else "—")
+            _n_total     = len(_y_pred_bin)
+            _n_pred_norm = int(np.sum(_y_pred_bin == "normal"))
+            _n_pred_abn  = int(np.sum(_y_pred_bin == "abnormal"))
+            _n_real_norm = int(np.sum(_y_true_bin == "normal"))  if _y_true_bin is not None else None
+            _n_real_abn  = int(np.sum(_y_true_bin == "abnormal")) if _y_true_bin is not None else None
 
+            # ── Composición ──────────────────────────────────────────────────
+            section_title("Composición del caso")
+            _rc1, _rc2, _rc3, _rc4, _rc5 = st.columns(5)
+            _rc1.metric("Total registros", f"{_n_total:,}")
+            _rc2.metric("Normal real",     f"{_n_real_norm:,}" if _n_real_norm is not None else "—")
+            _rc3.metric("Anormal real",    f"{_n_real_abn:,}"  if _n_real_abn  is not None else "—")
+            _rc4.metric("Pred Normal",     f"{_n_pred_norm:,}")
+            _rc5.metric("Pred Anormal",    f"{_n_pred_abn:,}")
+
+            # ── Métricas por clase + globales (solo cuando hay CM) ────────────
             if _eval and _eval.get("cm") is not None:
+                _cm = _eval["cm"]
+                _tn, _fp_v, _fn, _tp = _cm.ravel() if _cm.size == 4 else (0, 0, 0, 0)
+
+                def _safe_div(a, b):
+                    return float(a) / float(b) if b else 0.0
+
+                _rec_norm  = _safe_div(_tn, _tn + _fp_v)
+                _prec_norm = _safe_div(_tn, _tn + _fn)
+                _f1_norm   = _safe_div(2 * _prec_norm * _rec_norm, _prec_norm + _rec_norm)
+
+                _rec_abn   = _safe_div(_tp, _tp + _fn)
+                _prec_abn  = _safe_div(_tp, _tp + _fp_v)
+                _f1_abn    = _safe_div(2 * _prec_abn * _rec_abn, _prec_abn + _rec_abn)
+
+                _acc_m   = _safe_div(_tp + _tn, _n_total)
+                _bal_acc = (_rec_norm + _rec_abn) / 2
+                _f1_mac  = (_f1_norm + _f1_abn) / 2
+                _n_errs  = int(_fp_v + _fn)
+
+                st.write("")
+                section_title("Métricas por clase")
+                _rp1, _rp2, _rp3, _rp4, _rp5, _rp6 = st.columns(6)
+                _rp1.metric("Recall Normal",     f"{_rec_norm:.1%}",
+                            help="Especificidad: TN / (TN + FP)")
+                _rp2.metric("Precision Normal",  f"{_prec_norm:.1%}",
+                            help="TN / (TN + FN)")
+                _rp3.metric("F1 Normal",         f"{_f1_norm:.1%}")
+                _rp4.metric("Recall Anormal",    f"{_rec_abn:.1%}",
+                            help="Sensibilidad: TP / (TP + FN)")
+                _rp5.metric("Precision Anormal", f"{_prec_abn:.1%}",
+                            help="TP / (TP + FP)")
+                _rp6.metric("F1 Anormal",        f"{_f1_abn:.1%}")
+
+                st.write("")
+                section_title("Métricas globales")
+                _rg1, _rg2, _rg3, _rg4 = st.columns(4)
+                _rg1.metric("Accuracy",          f"{_acc_m:.1%}")
+                _rg2.metric("Balanced Accuracy", f"{_bal_acc:.1%}")
+                _rg3.metric("F1-macro",          f"{_f1_mac:.1%}")
+                _rg4.metric("Errores totales",   f"{_n_errs:,}",
+                            help=f"FP (Normal clasificado Anormal) = {_fp_v:,}  ·  "
+                                 f"FN (Anormal clasificado Normal) = {_fn:,}")
+
                 st.write("")
                 section_title("Matriz de confusión binaria (caso actual)")
-                _cm = _eval["cm"]
                 _cm_df = pd.DataFrame(
                     _cm,
                     index=["Real: Normal", "Real: Anormal"],
@@ -891,7 +935,6 @@ if _is_case_a:
                 )
                 with st.container(border=True):
                     st.dataframe(_cm_df, use_container_width=False)
-                    _tn, _fp_v, _fn, _tp = _cm.ravel() if _cm.size == 4 else (0, 0, 0, 0)
                     st.caption(
                         f"TN={_tn:,}  FP={_fp_v:,}  FN={_fn:,}  TP={_tp:,} "
                         "· positivo = Anormal"
@@ -905,26 +948,102 @@ if _is_case_a:
                 _pred_vis_df["beat_type"] = _feat_df["beat_type"].values
             _pred_vis_df["prediccion"] = _y_pred_bin
 
+            # Referencia temporal: mínimo time_second absoluto de las predicciones.
+            # El eje x del ECG va de 0 a max_seconds (relativo);
+            # t_rel = time_second - _segment_start_abs garantiza que los vrects
+            # caigan dentro del rango visible aunque time_second sea p. ej. 2021 s.
+            _segment_start_abs = (
+                float(_pred_vis_df["time_second"].min())
+                if not _pred_vis_df.empty and "time_second" in _pred_vis_df.columns
+                else 0.0
+            )
+
+            # Duración real del fragmento ECG disponible
+            _duration_available = float(len(_disp_sig)) / TARGET_FS
+
+            # Primera región Anormal → tiempo relativo desde _segment_start_abs
+            _first_anormal_t_rel: float | None = None
+            if (
+                not _pred_vis_df.empty
+                and "prediccion" in _pred_vis_df.columns
+                and "time_second" in _pred_vis_df.columns
+            ):
+                _abn_rows = _pred_vis_df[_pred_vis_df["prediccion"] == "abnormal"]
+                if not _abn_rows.empty:
+                    _first_anormal_t_rel = max(
+                        0.0,
+                        float(_abn_rows["time_second"].min()) - _segment_start_abs,
+                    )
+
+            # Defaults de vista: si hay región Anormal lejana, centrar en ella
+            if _first_anormal_t_rel is not None and _first_anormal_t_rel > 20:
+                _vstart_def = int(max(0, _first_anormal_t_rel - 10))
+                _vdur_def   = 80
+            else:
+                _vstart_def = 0
+                _vdur_def   = min(120, int(_duration_available))
+
+            _max_start = max(0, int(_duration_available) - 10)
+            _vstart_def = min(_vstart_def, _max_start)
+
             st.write("")
             section_title("ECG con regiones predichas")
-            _max_ecg_sec = st.slider(
-                "Ventana ECG (segundos)", min_value=10, max_value=60,
-                value=30, step=5, key="ecg_window_slider",
-            )
+
+            _sl_col1, _sl_col2 = st.columns(2)
+            with _sl_col1:
+                _view_start = float(st.slider(
+                    "Inicio relativo (s)",
+                    min_value=0,
+                    max_value=_max_start,
+                    value=_vstart_def,
+                    step=10,
+                    key=f"ecg_vstart_{_active_cid}",
+                ))
+            with _sl_col2:
+                _max_dur = max(10, int(_duration_available - _view_start))
+                _vdur_clamped = min(_vdur_def, _max_dur)
+                _view_duration = float(st.slider(
+                    "Duración mostrada (s)",
+                    min_value=10,
+                    max_value=min(_max_dur, 300),
+                    value=_vdur_clamped,
+                    step=10,
+                    key=f"ecg_vdur_{_active_cid}",
+                ))
+
+            # Recortar señal a la ventana elegida
+            _start_samp = int(_view_start * TARGET_FS)
+            _end_samp   = min(len(_disp_sig), int((_view_start + _view_duration) * TARGET_FS))
+            _sig_view   = _disp_sig[_start_samp:_end_samp]
+
+            # segment_start_time para el gráfico = origen absoluto + desplazamiento de vista
+            _segment_start_time_plot = _segment_start_abs + _view_start
+
+            if _view_start > 20:
+                st.caption(
+                    f"Vista inicial centrada en la región mixta del caso "
+                    f"(t_rel ≈ {int(_view_start)}–{int(_view_start + _view_duration)} s). "
+                    "Ajusta los controles para explorar otras zonas."
+                )
 
             with st.container(border=True):
                 st.plotly_chart(
-                    plot_ecg_with_prediction_regions(
-                        _disp_sig, TARGET_FS, _pred_vis_df,
-                        time_col="time_second", pred_col="prediccion",
-                        real_col="rhythm_label", beat_type_col="beat_type",
-                        max_seconds=float(_max_ecg_sec), start_offset=_disp_offset,
+                    plot_ecg_with_binary_prediction_bands(
+                        signal=_sig_view,
+                        fs=TARGET_FS,
+                        pred_df=_pred_vis_df,
+                        time_col="time_second",
+                        pred_col="prediccion",
+                        segment_start_time=_segment_start_time_plot,
+                        max_seconds=_view_duration,
                     ),
-                    use_container_width=True, config={"displayModeBar": False},
+                    use_container_width=True,
+                    config={"displayModeBar": True},
                 )
                 st.caption(
                     "Fondo rojo = regiones donde el modelo predice Anormal. "
-                    "Línea gris = señal ECG visualizada."
+                    "Línea gris = señal ECG visualizada. "
+                    "Usa el zoom de Plotly para explorar regiones específicas."
                 )
 
             st.write("")
@@ -934,6 +1053,7 @@ if _is_case_a:
             if "beat_type" in _feat_df.columns:
                 _show_cols_base.append("beat_type")
             _res_df = _feat_df[_show_cols_base].copy()
+            _res_df["t_rel_s"]    = (_res_df["time_second"] - _segment_start_abs).round(2)
             _res_df["Real"]       = [_display(v) for v in (_y_true_bin if _y_true_bin is not None else ["—"] * len(_y_pred_bin))]
             _res_df["Predicción"] = [_display(v) for v in _y_pred_bin]
             if _y_true_bin is not None:
@@ -945,35 +1065,56 @@ if _is_case_a:
             if "time_second" in _res_df.columns:
                 _res_df["time_second"] = _res_df["time_second"].round(3)
 
-            col_filt, _ = st.columns([2, 6])
-            with col_filt:
-                _show_errors = st.checkbox("Mostrar solo errores", value=False)
-            _res_display = (
-                _res_df[_res_df["✓/✗"] == "✗"]
-                if _show_errors and "✓/✗" in _res_df.columns
-                else _res_df
-            )
+            _filter_opts = [
+                "Todos",
+                "Solo Normal real",
+                "Solo Anormal real",
+                "Solo pred Normal",
+                "Solo pred Anormal",
+                "Solo errores",
+            ]
+            _col_filt, _ = st.columns([3, 5])
+            with _col_filt:
+                _tbl_filter = st.selectbox(
+                    "Filtrar tabla", _filter_opts, index=0, key="tbl_filter_sel"
+                )
+
+            _res_display = _res_df.copy()
+            if _tbl_filter == "Solo Normal real":
+                _res_display = _res_display[_res_display["Real"] == "Normal"]
+            elif _tbl_filter == "Solo Anormal real":
+                _res_display = _res_display[_res_display["Real"] == "Anormal"]
+            elif _tbl_filter == "Solo pred Normal":
+                _res_display = _res_display[_res_display["Predicción"] == "Normal"]
+            elif _tbl_filter == "Solo pred Anormal":
+                _res_display = _res_display[_res_display["Predicción"] == "Anormal"]
+            elif _tbl_filter == "Solo errores" and "✓/✗" in _res_display.columns:
+                _res_display = _res_display[_res_display["✓/✗"] == "✗"]
 
             with st.container(border=True):
+                _show_n = min(len(_res_display), 500)
                 st.dataframe(
-                    _res_display.head(300),
+                    _res_display.head(500),
                     use_container_width=True,
                     hide_index=True,
                     column_config={
-                        "✓/✗":         st.column_config.TextColumn(width="small"),
-                        "time_second": st.column_config.NumberColumn(
-                            "time (s)", format="%.3f", width="small"),
-                        "rhythm_label":st.column_config.TextColumn(
+                        "t_rel_s":      st.column_config.NumberColumn(
+                            "tiempo relativo (s)", format="%.2f", width="small"),
+                        "time_second":  st.column_config.NumberColumn(
+                            "time_second (abs)", format="%.3f", width="small"),
+                        "rhythm_label": st.column_config.TextColumn(
                             "rhythm_label (original)", width="medium"),
-                        "Real":        st.column_config.TextColumn(
+                        "Real":         st.column_config.TextColumn(
                             "Real (binario)", width="medium"),
-                        "Predicción":  st.column_config.TextColumn(
+                        "Predicción":   st.column_config.TextColumn(
                             "Predicción", width="medium"),
+                        "✓/✗":          st.column_config.TextColumn(width="small"),
                     },
                 )
                 st.caption(
                     "rhythm_label es contexto — evaluación: Normal (N) vs Anormal (≠ N). "
-                    f"Mostrando {min(len(_res_display), 300):,} de {len(_res_display):,} filas."
+                    f"Mostrando {_show_n:,} de {len(_res_display):,} filas "
+                    f"({len(_res_df):,} totales)."
                 )
 
             if _y_true_bin is not None and "✓/✗" in _res_df.columns:
