@@ -232,16 +232,27 @@ if _uploaded is not None:
 # ---------------------------------------------------------------------------
 # Resolve active case & signal
 # ---------------------------------------------------------------------------
-from utils.case_eval import (
-    find_annotation_file, load_case_annotations, load_case_metadata,
-    get_case_features_from_parquet, build_tabular_features_from_case,
-    load_npy_signal, summarize_npy_signal, find_valid_segments,
-    predict_case_windows, evaluate_case_predictions, TARGET_FS, WAVEFORMS_DIR,
-)
-from components.ecg_viewer import (
-    plot_ecg_signal, plot_raw_vs_processed,
-    plot_annotations_on_ecg, plot_ecg_with_prediction_regions,
-)
+try:
+    from utils.case_eval import (
+        find_annotation_file, load_case_annotations, load_case_metadata,
+        get_case_features_from_parquet, build_tabular_features_from_case,
+        load_npy_signal, summarize_npy_signal, find_valid_segments,
+        predict_case_windows, evaluate_case_predictions, TARGET_FS, WAVEFORMS_DIR,
+    )
+    from components.ecg_viewer import (
+        plot_ecg_signal, plot_raw_vs_processed,
+        plot_annotations_on_ecg, plot_ecg_with_prediction_regions,
+    )
+    _EVAL_MODULES_OK = True
+except ImportError as _import_err:
+    _EVAL_MODULES_OK = False
+    callout(
+        "err",
+        "Módulos de evaluación no disponibles",
+        f"Falta una dependencia requerida: <code>{_import_err}</code>. "
+        "Verifica que <code>requirements.txt</code> incluya plotly, numpy y pandas.",
+    )
+    st.stop()
 
 _active_cid = st.session_state.get("_p7_active_case")
 _source     = st.session_state.get("_p7_source", "demo")

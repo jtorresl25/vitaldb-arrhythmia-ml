@@ -1,0 +1,49 @@
+{
+  "approach": "autoencoder_anomaly_detection_pytorch",
+  "framework": "pytorch",
+  "device": "cuda",
+  "gpu_name": "NVIDIA GeForce RTX 4070 SUPER",
+  "roc_auc": 0.4488,
+  "threshold": 0.2840215,
+  "threshold_percentile": 95,
+  "train_windows_normal": 4718,
+  "test_windows_total": 2000,
+  "test_windows_normal": 1221,
+  "test_windows_anomalous": 779,
+  "train_cases": 60,
+  "test_cases": 20,
+  "epochs_configured": 15,
+  "epochs_trained": 15,
+  "bottleneck_dim": 32,
+  "window_seconds": 2.0,
+  "fs_hz": 500,
+  "fast_mode": true,
+  "train_time_seconds": 4.1,
+  "classification_report": {
+    "Normal": {
+      "precision": 0.5386178861788617,
+      "recall": 0.21703521703521703,
+      "f1-score": 0.30939871570344424,
+      "support": 1221.0
+    },
+    "An\u00f3malo": {
+      "precision": 0.3660477453580902,
+      "recall": 0.7086007702182285,
+      "f1-score": 0.48272846523830343,
+      "support": 779.0
+    },
+    "accuracy": 0.4085,
+    "macro avg": {
+      "precision": 0.45233281576847595,
+      "recall": 0.46281799362672277,
+      "f1-score": 0.3960635904708738,
+      "support": 2000.0
+    },
+    "weighted avg": {
+      "precision": 0.4714018163291713,
+      "recall": 0.4085,
+      "f1-score": 0.3769106531472719,
+      "support": 2000.0
+    }
+  }
+}

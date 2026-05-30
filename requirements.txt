@@ -1,17 +1,21 @@
+# ============================================================
+# Dependencias para la app Streamlit (Streamlit Cloud)
+# ============================================================
+
+# Streamlit
+streamlit
+plotly
+streamlit-option-menu
+
+# Ciencia de datos
 pandas
 numpy
-matplotlib
-seaborn
-scikit-learn
 scipy
-tqdm
-vitaldb
+scikit-learn
+joblib
+pyarrow
+matplotlib
+
+# Modelos ML (necesarios para deserializar el pipeline con joblib.load)
 xgboost
 imbalanced-learn
-jupyter
-ipykernel
-joblib
-pytest
-pyarrow
-fastparquet
-tensorflow
