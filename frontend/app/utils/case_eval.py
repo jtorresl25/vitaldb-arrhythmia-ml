@@ -38,7 +38,9 @@ PARQUET_PATH  = PROJECT_ROOT / "data" / "processed" / "filtered_tabular_modeling
 WAVEFORMS_DIR = PROJECT_ROOT / "data" / "raw" / "vitaldb_waveforms"
 
 TARGET_FS: float = 500.0
-_CASE_PATTERN = re.compile(r"^case[_-]?(\d+)\.npy$", re.IGNORECASE)
+
+# Demo per-case feature parquets (small, git-tracked, Streamlit Cloud friendly)
+_DEMO_FEATURES_DIR = _APP_DIR / "app_artifacts" / "demo" / "case_features"
 
 
 # ---------------------------------------------------------------------------
@@ -105,8 +107,21 @@ def _resolve_label_classes(model) -> "np.ndarray | None":
 # 1. extract_case_id_from_filename
 # ---------------------------------------------------------------------------
 def extract_case_id_from_filename(filename: str) -> int | None:
-    """Returns case_id from 'case_XXXX.npy', None if pattern not matched."""
-    m = _CASE_PATTERN.match(Path(filename).name)
+    """Robustly extract case_id from various .npy filename patterns.
+
+    Supports:
+      case_337.npy          → 337
+      case_337 (1).npy      → 337
+      case_337_fragment.npy → 337
+      337.npy               → 337
+    """
+    stem = Path(filename).stem  # strip extension
+    # Primary: "case" followed by digits (tolerates spaces, dashes, underscores)
+    m = re.search(r"case[\s_\-]+(\d+)", stem, re.IGNORECASE)
+    if m:
+        return int(m.group(1))
+    # Fallback: first standalone 3-5 digit number in the filename
+    m = re.search(r"\b(\d{3,5})\b", stem)
     return int(m.group(1)) if m else None
 
 
@@ -344,6 +359,49 @@ def get_case_features_from_parquet(
             base.append(c)
             seen.add(c)
     return case_df[base].sort_values("time_second").reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------------
+# 9b. demo_case_features_exist  /  get_case_features_for_demo
+# ---------------------------------------------------------------------------
+def demo_case_features_exist(case_id: int) -> bool:
+    """True if a pre-exported per-case feature parquet is in app_artifacts."""
+    return (_DEMO_FEATURES_DIR / f"case_{case_id}.parquet").exists()
+
+
+def get_case_features_for_demo(
+    case_id: int,
+    feature_columns: list[str],
+) -> "pd.DataFrame | None":
+    """Load per-case features for demo evaluation.
+
+    Search order:
+      A) app_artifacts/demo/case_features/case_<id>.parquet  — Streamlit Cloud
+      B) data/processed/filtered_tabular_modeling_dataset.parquet — local dev
+    Returns None if neither source has this case.
+    """
+    def _select_cols(df: pd.DataFrame) -> pd.DataFrame:
+        keep: list[str] = []
+        seen: set[str] = set()
+        for c in ("case_id", "time_second", "rhythm_label", "beat_type"):
+            if c in df.columns and c not in seen:
+                keep.append(c)
+                seen.add(c)
+        for c in feature_columns:
+            if c in df.columns and c not in seen:
+                keep.append(c)
+                seen.add(c)
+        return df[keep].sort_values("time_second").reset_index(drop=True)
+
+    # Path A — demo parquet (small, always available in cloud)
+    demo_path = _DEMO_FEATURES_DIR / f"case_{case_id}.parquet"
+    if demo_path.exists():
+        df = pd.read_parquet(demo_path)
+        if not df.empty:
+            return _select_cols(df)
+
+    # Path B — full parquet (local dev)
+    return get_case_features_from_parquet(case_id, feature_columns)
 
 
 # ---------------------------------------------------------------------------

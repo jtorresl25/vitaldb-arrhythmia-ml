@@ -538,12 +538,30 @@ st.write("")
 # ---------------------------------------------------------------------------
 # Section 3: Upload .npy
 # ---------------------------------------------------------------------------
-section_title("Subir archivo ECG (.npy)")
+section_title("Explorar señal ECG (.npy)")
+
+callout(
+    "info",
+    "Demostración conceptual — carga de señal ECG",
+    "Esta sección muestra cómo podría funcionar una carga directa de señales ECG "
+    "en una versión futura de la app. "
+    "El modelo actual <b>no predice únicamente a partir del archivo .npy</b>, "
+    "porque fue entrenado con features tabulares derivadas de anotaciones, "
+    "intervalos RR y metadata clínica. "
+    "Por eso, los archivos ECG externos se usan para <b>visualización</b>. "
+    "Solo los casos VitalDB conocidos que tengan features procesadas disponibles "
+    "pueden evaluarse con el modelo binario Normal/Anormal.",
+)
+
+st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
 
 st.html(
     '<p style="font-size:12px;color:var(--fg-3);margin:0 0 10px">'
-    'Acepta archivos .npy 1D con señal ECG a 500 Hz. '
-    'Para evaluación completa, usa un archivo llamado <code>case_XXXX.npy</code>.'
+    'Puedes subir un archivo <code>.npy</code> 1D para visualizar la señal ECG. '
+    'Si el nombre contiene un case_id disponible (p. ej. <code>case_337.npy</code> '
+    'o <code>case_337 (1).npy</code>), la app intentará asociarlo con sus features '
+    'tabulares y mostrar predicciones. '
+    'Para señales externas sin features asociadas, solo se mostrará la visualización.'
     '</p>'
 )
 _uploaded = st.file_uploader(
@@ -588,9 +606,10 @@ _npy_exists = bool(
 try:
     from utils.case_eval import (
         find_annotation_file, load_case_annotations, load_case_metadata,
-        get_case_features_from_parquet, build_tabular_features_from_case,
+        get_case_features_from_parquet, get_case_features_for_demo,
+        demo_case_features_exist, build_tabular_features_from_case,
         load_npy_signal, summarize_npy_signal, find_valid_segments,
-        predict_case_windows, TARGET_FS, WAVEFORMS_DIR,
+        predict_case_windows, TARGET_FS, WAVEFORMS_DIR, PARQUET_PATH,
     )
     from components.ecg_viewer import (
         plot_ecg_signal, plot_raw_vs_processed,
@@ -672,31 +691,72 @@ if _signal is None:
     st.warning("No se pudo cargar la señal. Verifica el archivo o selecciona otro caso.")
     st.stop()
 
-# Determine Case A (with annotations) vs ECG-only
-_ann_path  = find_annotation_file(_active_cid) if _active_cid else None
-_is_case_a = (_active_cid is not None) and (_ann_path is not None)
+# Determine feature availability (works in Streamlit Cloud via demo parquets)
+_ann_path    = find_annotation_file(_active_cid) if _active_cid else None
+_meta_md_a   = load_model_metadata()
+_feat_cols_a = (
+    (_meta_md_a.get("numeric_features", []) + _meta_md_a.get("categorical_features", []))
+    if _meta_md_a else _FEAT_COLS_FALLBACK
+)
+# Case A if any features source is reachable for this case_id
+_has_features_src = (
+    _active_cid is not None
+    and _feat_cols_a
+    and (
+        demo_case_features_exist(_active_cid)   # demo parquet in app_artifacts ✓ cloud
+        or PARQUET_PATH.exists()                 # full parquet — local dev only
+        or _ann_path is not None                 # build from annotation + metadata
+    )
+)
+_is_case_a = _has_features_src
 
 st.write("")
 st.html('<hr style="border-color:var(--line-1);margin:4px 0 20px">')
 
 if _is_case_a:
+    _feat_src = (
+        "demo parquet" if demo_case_features_exist(_active_cid)
+        else "parquet local" if PARQUET_PATH.exists()
+        else "anotaciones"
+    )
+    _src_note = (
+        f"· features tabulares disponibles ({_feat_src}) · predicción binaria disponible"
+        if _source == "upload"
+        else f"· features tabulares ({_feat_src}) · predicción binaria disponible"
+    )
     st.html(
         f'<div style="display:inline-flex;align-items:center;gap:10px;padding:6px 14px;'
         f'background:rgba(45,212,191,0.08);border:1px solid rgba(45,212,191,0.3);'
         f'border-radius:6px;margin-bottom:14px">'
         f'<span style="color:#2dd4bf;font-weight:600;font-size:13px">✓ Caso VitalDB reconocido</span>'
         f'<span style="color:#8a98b5;font-size:11px;font-family:var(--mono)">case_id = {_active_cid}</span>'
-        f'<span style="color:#8a98b5;font-size:11px">· evaluación binaria disponible</span>'
+        f'<span style="color:#8a98b5;font-size:11px">{_src_note}</span>'
         f'</div>'
     )
+    if _source == "upload":
+        callout(
+            "info",
+            f"Se detectó case_id = {_active_cid} y se encontraron features tabulares asociadas",
+            "La señal <code>.npy</code> se usa para visualización, mientras que la predicción "
+            "Normal/Anormal se calcula con las features procesadas del caso. "
+            "Esta funcionalidad es demostrativa y académica. "
+            "No debe usarse para diagnóstico ni interpretación clínica real.",
+        )
 else:
+    _no_feat_note = (
+        f"case_id {_active_cid} detectado — features tabulares no disponibles"
+        if _active_cid is not None
+        else "Señal ECG externa — solo visualización"
+        if _source == "upload"
+        else "Archivo sin features asociadas — solo visualización ECG"
+    )
     st.html(
-        '<div style="display:inline-flex;align-items:center;gap:8px;padding:6px 14px;'
-        'background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.3);'
-        'border-radius:6px;margin-bottom:14px">'
-        '<span style="color:#fbbf24;font-weight:600;font-size:13px">⚠ Archivo sin anotaciones</span>'
-        '<span style="color:#8a98b5;font-size:11px">solo visualización ECG disponible</span>'
-        '</div>'
+        f'<div style="display:inline-flex;align-items:center;gap:8px;padding:6px 14px;'
+        f'background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.3);'
+        f'border-radius:6px;margin-bottom:14px">'
+        f'<span style="color:#fbbf24;font-weight:600;font-size:13px">⚠ {_no_feat_note}</span>'
+        f'<span style="color:#8a98b5;font-size:11px">predicción no disponible para este archivo</span>'
+        f'</div>'
     )
 
 # ---------------------------------------------------------------------------
@@ -769,39 +829,54 @@ elif _proc_sig is not None:
         st.plotly_chart(_fp, use_container_width=True, config={"displayModeBar": False})
 
 # ===========================================================================
-# CASO A — prediction + binary evaluation (annotations available)
+# CASO A — prediction + binary evaluation (features available)
 # ===========================================================================
 if _is_case_a:
     st.html('<hr style="border-color:var(--line-1);margin:24px 0 16px">')
     section_title(f"Predicción binaria · case_id = {_active_cid}")
 
-    _ann      = load_case_annotations(_ann_path)
-    _meta_row = load_case_metadata(_active_cid)
+    # Note: _meta_md_a and _feat_cols_a already computed above the banner block
     _model_p  = load_model()
-    _meta_md  = load_model_metadata()
 
-    _feat_cols_a = (
-        (_meta_md.get("numeric_features", []) + _meta_md.get("categorical_features", []))
-        if _meta_md else _FEAT_COLS_FALLBACK
-    )
+    # ── Load feature DataFrame (cloud-friendly: demo parquet > full parquet > build)
+    _feat_df = st.session_state.get("_p7_feat_df")
+    if _feat_df is None:
+        _feat_df = get_case_features_for_demo(_active_cid, _feat_cols_a)
 
-    col_ann1, col_ann2, col_ann3, col_ann4 = st.columns(4)
-    col_ann1.metric("Latidos anotados", f"{len(_ann):,}")
-    if "rhythm_label" in _ann.columns:
-        _n_normal   = int((_ann["rhythm_label"] == "N").sum())
-        _n_abnormal = int((_ann["rhythm_label"] != "N").sum())
-        col_ann2.metric("Normal (N)",    f"{_n_normal:,}")
-        col_ann3.metric("Anormal (≠ N)", f"{_n_abnormal:,}")
-        col_ann4.metric("Clases originales", str(_ann["rhythm_label"].nunique()))
-    else:
-        col_ann2.metric("Normal",   "—")
-        col_ann3.metric("Anormal",  "—")
-        col_ann4.metric("Metadata", "Sí" if _meta_row is not None else "No")
+        # Fallback: build from annotation file + metadata (local only)
+        if _feat_df is None and _ann_path is not None:
+            _ann_raw  = load_case_annotations(_ann_path)
+            _meta_row = load_case_metadata(_active_cid)
+            if _meta_row is not None and len(_ann_raw) > 0:
+                _feat_df, _missing = build_tabular_features_from_case(
+                    _ann_raw, _meta_row, _feat_cols_a
+                )
+                if _missing:
+                    callout("warn", f"{len(_missing)} features faltantes",
+                            ", ".join(f"<code>{f}</code>" for f in _missing))
 
-    if len(_ann) > 0:
-        _ann_win = _ann[
-            (_ann["time_second"] >= _disp_offset) &
-            (_ann["time_second"] <= _disp_offset + 10)
+        st.session_state["_p7_feat_df"] = _feat_df
+
+    # ── Distribution metrics from feat_df (works without annotation file)
+    if _feat_df is not None and len(_feat_df) > 0:
+        _has_rl     = "rhythm_label" in _feat_df.columns
+        _n_records  = len(_feat_df)
+        _n_normal   = int((_feat_df["rhythm_label"] == "N").sum())  if _has_rl else None
+        _n_abnormal = (_n_records - _n_normal)                      if _n_normal is not None else None
+        _n_classes  = int(_feat_df["rhythm_label"].nunique())        if _has_rl else None
+
+        col_ann1, col_ann2, col_ann3, col_ann4 = st.columns(4)
+        col_ann1.metric("Registros", f"{_n_records:,}")
+        col_ann2.metric("Normal (N)",    f"{_n_normal:,}"   if _n_normal   is not None else "—")
+        col_ann3.metric("Anormal (≠ N)", f"{_n_abnormal:,}" if _n_abnormal is not None else "—")
+        col_ann4.metric("Clases originales", str(_n_classes) if _n_classes else "—")
+
+    # ── ECG annotation overlay (only if annotation CSV is available locally)
+    if _ann_path is not None and _feat_df is not None:
+        _ann_overlay = load_case_annotations(_ann_path)
+        _ann_win = _ann_overlay[
+            (_ann_overlay["time_second"] >= _disp_offset) &
+            (_ann_overlay["time_second"] <= _disp_offset + 10)
         ]
         if len(_ann_win) > 0:
             with st.container(border=True):
@@ -821,24 +896,10 @@ if _is_case_a:
     if _model_p is None:
         callout("warn", "Modelo no disponible",
                 "No se encontró <code>tabular_best_model_pipeline.joblib</code>.")
-    elif len(_ann) == 0:
-        callout("warn", "Sin anotaciones válidas", "El archivo no tiene filas con rhythm_label.")
-    else:
-        _feat_df = st.session_state.get("_p7_feat_df")
-        if _feat_df is None:
-            _feat_df = get_case_features_from_parquet(_active_cid, _feat_cols_a)
-            if _feat_df is None:
-                if _meta_row is None:
-                    callout("warn", "Metadata no disponible",
-                            f"No se encontró case_id={_active_cid} en el parquet.")
-                else:
-                    _feat_df, _missing = build_tabular_features_from_case(
-                        _ann, _meta_row, _feat_cols_a
-                    )
-                    if _missing:
-                        callout("warn", f"{len(_missing)} features faltantes",
-                                ", ".join(f"<code>{f}</code>" for f in _missing))
-            st.session_state["_p7_feat_df"] = _feat_df
+    elif _feat_df is None or len(_feat_df) == 0:
+        callout("warn", "Features no disponibles",
+                f"No se pudieron obtener features tabulares para case_id={_active_cid}. "
+                "Sin RR intervals y metadata clínica no es posible ejecutar el modelo.")
 
         if _feat_df is not None and len(_feat_df) > 0:
             _preds_raw = st.session_state.get("_p7_predictions")
@@ -911,18 +972,6 @@ if _is_case_a:
                     value=30, step=5, key="ecg_window_slider",
                 )
 
-                with st.expander("Debug — predicciones para el gráfico ECG", expanded=False):
-                    st.write("Columnas de _pred_vis_df:", _pred_vis_df.columns.tolist())
-                    st.write("start_offset (_disp_offset):", _disp_offset)
-                    st.write("time_second range:",
-                             float(_pred_vis_df["time_second"].min()) if "time_second" in _pred_vis_df.columns else "N/A",
-                             "→",
-                             float(_pred_vis_df["time_second"].max()) if "time_second" in _pred_vis_df.columns else "N/A")
-                    if "prediccion" in _pred_vis_df.columns:
-                        st.write("prediccion value_counts:", _pred_vis_df["prediccion"].value_counts(dropna=False).to_dict())
-                    else:
-                        st.write("⚠ columna 'prediccion' NO encontrada")
-
                 with st.container(border=True):
                     st.plotly_chart(
                         plot_ecg_with_prediction_regions(
@@ -934,8 +983,8 @@ if _is_case_a:
                         use_container_width=True, config={"displayModeBar": False},
                     )
                     st.caption(
-                        "Normal = gris · Anormal = rojo. "
-                        "rhythm_label original mostrado como contexto."
+                        "Fondo rojo = regiones donde el modelo predice Anormal. "
+                        "Línea gris = señal ECG visualizada."
                     )
 
                 st.write("")
@@ -1014,11 +1063,20 @@ else:
     st.html('<hr style="border-color:var(--line-1);margin:24px 0 16px">')
     callout(
         "warn",
-        "Sin anotaciones — solo visualización ECG disponible",
-        "El modelo binario requiere features tabulares: RR intervals derivados de "
-        "anotaciones de latidos + metadata clínica. "
-        "Para evaluación completa, el archivo debe llamarse <code>case_XXXX.npy</code> "
-        "y debe existir el archivo de anotaciones correspondiente.",
+        "Predicción no disponible para esta señal",
+        "No fue posible ejecutar el modelo sobre este archivo porque el modelo actual "
+        "requiere features tabulares compatibles con el pipeline de entrenamiento: "
+        "intervalos RR, posición temporal y metadata clínica. "
+        "La señal ECG se muestra únicamente como visualización. "
+        "<br><br>"
+        "En una versión futura, un modelo entrenado directamente sobre ECG crudo "
+        "permitiría predecir Normal/Anormal a partir del <code>.npy</code> sin "
+        "requerir anotaciones previas. "
+        "<br>"
+        "<span style='color:var(--fg-3);font-size:11.5px'>"
+        "Esta funcionalidad es demostrativa y académica. "
+        "No debe usarse para diagnóstico ni interpretación clínica real."
+        "</span>",
     )
 
 page_footer()

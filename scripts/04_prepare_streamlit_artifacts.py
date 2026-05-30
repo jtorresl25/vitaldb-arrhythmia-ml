@@ -33,13 +33,19 @@ APP_ARTIFACTS_DIR    = PROJECT_ROOT / "frontend" / "app" / "app_artifacts"
 ARTIFACTS_MODELS_DIR = APP_ARTIFACTS_DIR / "models"
 ARTIFACTS_TABLES_DIR = APP_ARTIFACTS_DIR / "reports" / "tables"
 ARTIFACTS_FIGURES_DIR = APP_ARTIFACTS_DIR / "reports" / "figures"
-ARTIFACTS_DEMO_DIR   = APP_ARTIFACTS_DIR / "demo"
-ARTIFACTS_NPY_DIR    = ARTIFACTS_DEMO_DIR / "npy_cases"
+ARTIFACTS_DEMO_DIR        = APP_ARTIFACTS_DIR / "demo"
+ARTIFACTS_NPY_DIR         = ARTIFACTS_DEMO_DIR / "npy_cases"
+ARTIFACTS_CASE_FEAT_DIR   = ARTIFACTS_DEMO_DIR / "case_features"
 
-# Primary demo case for the downloadable ECG fragment
-_PRIMARY_DEMO_CASE = 337
-_FRAGMENT_SECONDS  = 60     # max seconds to extract from a raw waveform
-_FRAGMENT_FS       = 500    # assumed sample rate
+PARQUET_PATH = PROJECT_ROOT / "data" / "processed" / "filtered_tabular_modeling_dataset.parquet"
+META_PATH    = PROJECT_ROOT / "models" / "tabular_best_model_metadata.json"
+
+# Demo cases whose .npy fragments are included in app_artifacts
+# Run scripts/06_prepare_selected_demo_npy.py first to generate the fragments.
+_DEMO_NPY_CASES   = [5377, 2040, 337, 3098]
+_PRIMARY_DEMO_CASE = 337     # shown as recommended download in the UI
+_FRAGMENT_SECONDS  = 60      # max seconds to extract from a raw waveform
+_FRAGMENT_FS       = 500     # assumed sample rate
 
 # ---------------------------------------------------------------------------
 # Required model files
@@ -173,6 +179,68 @@ def _ensure_case_npy(case_id: int) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Export per-case feature parquets for demo (cloud-friendly, small)
+# ---------------------------------------------------------------------------
+def _export_case_features(demo_cases: list[int]) -> list[int]:
+    """Export per-case feature rows to ARTIFACTS_CASE_FEAT_DIR.
+
+    Reads the full processed parquet, selects only the demo case rows and
+    the columns needed by the model, writes individual parquets.
+    Returns list of case_ids successfully exported.
+    """
+    import json
+
+    ARTIFACTS_CASE_FEAT_DIR.mkdir(parents=True, exist_ok=True)
+
+    if not PARQUET_PATH.exists():
+        _warn(f"Parquet no encontrado: {PARQUET_PATH.relative_to(PROJECT_ROOT)}")
+        _warn("Omitiendo exportacion de features por caso. Demo solo funcionara localmente.")
+        return []
+
+    if not META_PATH.exists():
+        _warn(f"Metadata no encontrada: {META_PATH.relative_to(PROJECT_ROOT)}")
+        return []
+
+    with open(META_PATH, encoding="utf-8") as f:
+        meta = json.load(f)
+    numeric_features     = meta.get("numeric_features", [])
+    categorical_features = meta.get("categorical_features", [])
+    feature_cols         = numeric_features + categorical_features
+
+    print(f"  Leyendo parquet: {PARQUET_PATH.relative_to(PROJECT_ROOT)}")
+    df_full = None  # lazy load: read once, slice per case
+
+    exported = []
+    for cid in demo_cases:
+        dst = ARTIFACTS_CASE_FEAT_DIR / f"case_{cid}.parquet"
+        # Load lazily
+        if df_full is None:
+            df_full = __import__("pandas").read_parquet(PARQUET_PATH)
+
+        df_case = df_full[df_full["case_id"] == cid].copy()
+        if df_case.empty:
+            _warn(f"case_{cid}: no encontrado en el parquet")
+            continue
+
+        # Select columns: identifiers + labels + features
+        keep = ["case_id"]
+        for c in ("time_second", "rhythm_label", "beat_type"):
+            if c in df_case.columns:
+                keep.append(c)
+        for c in feature_cols:
+            if c in df_case.columns and c not in keep:
+                keep.append(c)
+
+        df_out = df_case[keep].sort_values("time_second").reset_index(drop=True)
+        df_out.to_parquet(dst, index=False)
+        size_kb = dst.stat().st_size / 1024
+        _ok(f"case_{cid}: {len(df_out):,} registros → {dst.relative_to(PROJECT_ROOT)}  ({size_kb:.1f} KB)")
+        exported.append(cid)
+
+    return exported
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main() -> None:
@@ -183,7 +251,8 @@ def main() -> None:
     # 1. Folder structure
     print("\n[1/6] Creando estructura de carpetas...")
     for d in (ARTIFACTS_MODELS_DIR, ARTIFACTS_TABLES_DIR,
-              ARTIFACTS_FIGURES_DIR, ARTIFACTS_NPY_DIR):
+              ARTIFACTS_FIGURES_DIR, ARTIFACTS_NPY_DIR,
+              ARTIFACTS_CASE_FEAT_DIR):
         _mkdir(d)
 
     # 2. Required model files
@@ -207,9 +276,17 @@ def main() -> None:
               ARTIFACTS_FIGURES_DIR / dst_name,
               optional=True)
 
-    # 5. Primary demo case .npy (case_337 — mixto representativo)
-    print(f"\n[5/6] Caso demo principal: case_{_PRIMARY_DEMO_CASE}.npy...")
-    primary_ok = _ensure_case_npy(_PRIMARY_DEMO_CASE)
+    # 5. All demo case .npy fragments
+    print(f"\n[5/6] Copiando fragmentos .npy de casos demo...")
+    npy_ok = []
+    for cid in _DEMO_NPY_CASES:
+        if _ensure_case_npy(cid):
+            npy_ok.append(cid)
+    primary_ok = _PRIMARY_DEMO_CASE in npy_ok
+
+    # 5b. Export per-case feature parquets (needed for Streamlit Cloud predictions)
+    print(f"\n[5b/6] Exportando features por caso demo...")
+    feat_exported = _export_case_features(_DEMO_NPY_CASES)
 
     # 6. Copy demo_cases_binary.csv (already managed by scripts/05_select_binary_demo_cases.py)
     print("\n[6/6] Copiando demo_cases_binary.csv...")
@@ -237,7 +314,9 @@ def main() -> None:
     else:
         print("\n  [ok]  Todos los archivos obligatorios copiados.")
 
-    print(f"\n  case_{_PRIMARY_DEMO_CASE}.npy: {'disponible' if primary_ok else 'NO DISPONIBLE'}")
+    print(f"\n  .npy disponibles: {npy_ok} ({len(npy_ok)}/{len(_DEMO_NPY_CASES)})")
+    print(f"  case_{_PRIMARY_DEMO_CASE}.npy (principal): {'disponible' if primary_ok else 'NO DISPONIBLE'}")
+    print(f"  features por caso exportadas: {feat_exported} ({len(feat_exported)}/{len(_DEMO_NPY_CASES)})")
     print(f"\n  Carpeta: {APP_ARTIFACTS_DIR.relative_to(PROJECT_ROOT)}")
     print(f"  Archivos: {len(all_files)}")
     print(f"  Tamanio:  {total_size_mb:.1f} MB")
