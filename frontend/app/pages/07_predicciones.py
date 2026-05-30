@@ -72,6 +72,56 @@ def _display(val: str) -> str:
     return _LABEL_DISPLAY.get(str(val).lower().strip(), str(val).title())
 
 
+# ---------------------------------------------------------------------------
+# Slider helpers — prevent StreamlitAPIException when value is out of range
+# ---------------------------------------------------------------------------
+def _safe_float(v, default: float = 0.0) -> float:
+    try:
+        return float(v) if v is not None else default
+    except Exception:
+        return default
+
+
+def _clamp(v, lo, hi) -> float:
+    lo = _safe_float(lo, 0.0)
+    hi = _safe_float(hi, lo)
+    if hi < lo:
+        hi = lo
+    return max(lo, min(_safe_float(v, lo), hi))
+
+
+def _safe_slider(
+    label: str,
+    min_value: float,
+    max_value: float,
+    value: float,
+    step: float = 1.0,
+    key: str | None = None,
+) -> float:
+    """Render st.slider with guaranteed valid range; returns min_value if range is degenerate."""
+    min_value = _safe_float(min_value, 0.0)
+    max_value = _safe_float(max_value, min_value)
+    if max_value <= min_value:
+        return min_value
+    value = _clamp(value, min_value, max_value)
+    # Clear stale session-state values that fall outside the current range
+    if key is not None and key in st.session_state:
+        try:
+            old = float(st.session_state[key])
+            if old < min_value or old > max_value:
+                del st.session_state[key]
+        except Exception:
+            del st.session_state[key]
+    return float(st.slider(
+        label,
+        min_value=float(min_value),
+        max_value=float(max_value),
+        value=float(value),
+        step=float(step),
+        key=key,
+    ))
+
+
 def _evaluate_binary(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
     from sklearn.metrics import (
         accuracy_score, precision_score, recall_score,
@@ -961,90 +1011,89 @@ if _is_case_a:
             # Duración real del fragmento ECG disponible
             _duration_available = float(len(_disp_sig)) / TARGET_FS
 
-            # Primera región Anormal → tiempo relativo desde _segment_start_abs
-            _first_anormal_t_rel: float | None = None
-            if (
-                not _pred_vis_df.empty
-                and "prediccion" in _pred_vis_df.columns
-                and "time_second" in _pred_vis_df.columns
-            ):
-                _abn_rows = _pred_vis_df[_pred_vis_df["prediccion"] == "abnormal"]
-                if not _abn_rows.empty:
-                    _first_anormal_t_rel = max(
-                        0.0,
-                        float(_abn_rows["time_second"].min()) - _segment_start_abs,
-                    )
-
-            # Defaults de vista: si hay región Anormal lejana, centrar en ella
-            if _first_anormal_t_rel is not None and _first_anormal_t_rel > 20:
-                _vstart_def = int(max(0, _first_anormal_t_rel - 10))
-                _vdur_def   = 80
-            else:
-                _vstart_def = 0
-                _vdur_def   = min(120, int(_duration_available))
-
-            _max_start = max(0, int(_duration_available) - 10)
-            _vstart_def = min(_vstart_def, _max_start)
-
             st.write("")
             section_title("ECG con regiones predichas")
 
-            _sl_col1, _sl_col2 = st.columns(2)
-            with _sl_col1:
-                _view_start = float(st.slider(
-                    "Inicio relativo (s)",
-                    min_value=0,
-                    max_value=_max_start,
-                    value=_vstart_def,
-                    step=10,
-                    key=f"ecg_vstart_{_active_cid}",
-                ))
-            with _sl_col2:
-                _max_dur = max(10, int(_duration_available - _view_start))
-                _vdur_clamped = min(_vdur_def, _max_dur)
-                _view_duration = float(st.slider(
-                    "Duración mostrada (s)",
-                    min_value=10,
-                    max_value=min(_max_dur, 300),
-                    value=_vdur_clamped,
-                    step=10,
-                    key=f"ecg_vdur_{_active_cid}",
-                ))
+            if _duration_available <= 0:
+                callout("warn", "Señal no disponible",
+                        "No hay muestras suficientes para graficar.")
+            else:
+                # Defaults de inicio y duración
+                _cid_int = int(_active_cid) if _active_cid is not None else -1
+                if _cid_int == 337:
+                    _vstart_def   = min(589.0, max(0.0, _duration_available - 5.0))
+                    _vdur_def     = min(80.0,  max(5.0, _duration_available - _vstart_def))
+                    if _vdur_def < 5.0:
+                        _vstart_def = max(0.0, _duration_available - 80.0)
+                        _vdur_def   = min(80.0, _duration_available - _vstart_def)
+                else:
+                    _vstart_def = 0.0
+                    _vdur_def   = min(120.0, _duration_available)
 
-            # Recortar señal a la ventana elegida
-            _start_samp = int(_view_start * TARGET_FS)
-            _end_samp   = min(len(_disp_sig), int((_view_start + _view_duration) * TARGET_FS))
-            _sig_view   = _disp_sig[_start_samp:_end_samp]
+                _ecg_key_pfx = str(_active_cid) if _active_cid is not None else "uploaded"
 
-            # segment_start_time para el gráfico = origen absoluto + desplazamiento de vista
-            _segment_start_time_plot = _segment_start_abs + _view_start
+                # Slider 1 — inicio relativo
+                _max_start = max(0.0, _duration_available - 1.0)
+                _sl_col1, _sl_col2 = st.columns(2)
+                with _sl_col1:
+                    _view_start = _safe_slider(
+                        "Inicio relativo ECG (s)",
+                        min_value=0.0,
+                        max_value=_max_start,
+                        value=_clamp(_vstart_def, 0.0, _max_start),
+                        step=1.0,
+                        key=f"ecg_view_start_{_ecg_key_pfx}",
+                    )
 
-            if _view_start > 20:
-                st.caption(
-                    f"Vista inicial centrada en la región mixta del caso "
-                    f"(t_rel ≈ {int(_view_start)}–{int(_view_start + _view_duration)} s). "
-                    "Ajusta los controles para explorar otras zonas."
-                )
+                # Slider 2 — duración (rango depende del inicio elegido)
+                _max_dur     = max(1.0, _duration_available - _view_start)
+                _min_dur     = min(5.0, _max_dur)
+                _vdur_clamped = _clamp(_vdur_def, _min_dur, _max_dur)
+                with _sl_col2:
+                    _view_duration = _safe_slider(
+                        "Duración mostrada (s)",
+                        min_value=_min_dur,
+                        max_value=min(_max_dur, 300.0),
+                        value=_vdur_clamped,
+                        step=1.0,
+                        key=f"ecg_view_duration_{_ecg_key_pfx}",
+                    )
 
-            with st.container(border=True):
-                st.plotly_chart(
-                    plot_ecg_with_binary_prediction_bands(
-                        signal=_sig_view,
-                        fs=TARGET_FS,
-                        pred_df=_pred_vis_df,
-                        time_col="time_second",
-                        pred_col="prediccion",
-                        segment_start_time=_segment_start_time_plot,
-                        max_seconds=_view_duration,
-                    ),
-                    use_container_width=True,
-                    config={"displayModeBar": True},
-                )
-                st.caption(
-                    "Fondo rojo = regiones donde el modelo predice Anormal. "
-                    "Línea gris = señal ECG visualizada. "
-                    "Usa el zoom de Plotly para explorar regiones específicas."
-                )
+                # Recortar señal a la ventana elegida
+                _start_samp = int(_view_start * TARGET_FS)
+                _end_samp   = min(len(_disp_sig),
+                                  int((_view_start + _view_duration) * TARGET_FS))
+                _sig_view   = _disp_sig[_start_samp:_end_samp]
+
+                # segment_start_time = tiempo absoluto VitalDB del inicio de la ventana
+                _segment_start_time_plot = _segment_start_abs + _view_start
+
+                if _view_start > 20:
+                    st.caption(
+                        f"Vista centrada en t_rel ≈ {int(_view_start)}–"
+                        f"{int(_view_start + _view_duration)} s. "
+                        "Ajusta los controles para explorar otras zonas."
+                    )
+
+                with st.container(border=True):
+                    st.plotly_chart(
+                        plot_ecg_with_binary_prediction_bands(
+                            signal=_sig_view,
+                            fs=TARGET_FS,
+                            pred_df=_pred_vis_df,
+                            time_col="time_second",
+                            pred_col="prediccion",
+                            segment_start_time=_segment_start_time_plot,
+                            max_seconds=_view_duration,
+                        ),
+                        use_container_width=True,
+                        config={"displayModeBar": True},
+                    )
+                    st.caption(
+                        "Fondo rojo = regiones donde el modelo predice Anormal. "
+                        "Línea gris = señal ECG visualizada. "
+                        "Usa el zoom de Plotly para explorar regiones específicas."
+                    )
 
             st.write("")
             section_title("Tabla: Real vs Predicción binaria")
